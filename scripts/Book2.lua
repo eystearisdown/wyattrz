@@ -1,5 +1,5 @@
--- Mimic Slate 1.0.0 / Book2
--- Loads the shared Slate UI from your GitHub repository.
+-- Mimic CC UI 1.1.0 / Book2
+-- Loads the original cc WindUI from your shared GitHub UI file.
 -- Book2 includes all supplied Paintings coordinates; no painting download is needed.
 local PAYLOAD = [====[
 -- Generated from the maintained source modules. No GG loader is required.
@@ -9889,9 +9889,9 @@ return {
 end
 
 local Runtime = (function()
--- Mimic Slate runtime. UI and all game adapters are injected by the release builder.
+-- Mimic runtime with the original cc WindUI interface.
 local Runtime = {}
-local VERSION = "1.0.0"
+local VERSION = "1.1.0-cc"
 
 local function environment()
     local ok, env = pcall(function() return getgenv and getgenv() end)
@@ -10057,11 +10057,11 @@ function Runtime.start(options)
             end)
             if ok then ctx.UISource = "GitHub"; return result end
             ctx.UIError = tostring(result)
-            if not modules.SlateUI then error("Cannot load Slate UI: " .. ctx.UIError, 0) end
+            if not modules.CCUI then error("Cannot load CC UI: " .. ctx.UIError, 0) end
         end
-        assert(modules.SlateUI, "Slate UI is unavailable")
+        assert(modules.CCUI, "CC UI is unavailable")
         ctx.UISource = "Bundled"
-        return modules.SlateUI()
+        return modules.CCUI()
     end
     local uiOK, uiResult = pcall(loadUI)
     if not uiOK then ctx.Destroy(); error(tostring(uiResult), 0) end
@@ -10387,12 +10387,12 @@ end)
     local uiFacade = setmetatable({}, {__index = ctx.UI})
     function uiFacade:CreateWindow(params)
         params = params or {}
-        params.Title = "MIMIC"
+        params.Title = scope == "Book3" and "Nevoirs - Rage" or ("Nevoirs - " .. (scope:gsub("Book", "Book ")))
         params.Subtitle = scope == "Gamemodes" and "GAMEMODES" or (scope:gsub("Book", "BOOK "))
-        params.Folder = "MimicSlate/" .. scope
-        params.Size = UDim2.fromOffset(680, 490)
-        params.SideBarWidth = 152
-        params.Transparent = false
+        params.Author = "Nevoirs"
+        params.Folder = scope == "Book3" and "Nevoirs_Rage" or ("Nevoirs_" .. scope)
+        params.Theme = "Dark"
+        params.Transparent = true
         params.Acrylic = false
         params.ToggleKey = Enum.KeyCode.RightControl
         local window = ctx.UI:CreateWindow(params)
@@ -10402,10 +10402,10 @@ end)
     end
 
     local gg = {
-        Configs = ctx.Config, ScriptCache = {userIdentify = "Mimic Slate"}, QUEUE_INFO = ctx.QueueInfo,
+        Configs = ctx.Config, ScriptCache = {userIdentify = "Nevoirs"}, QUEUE_INFO = ctx.QueueInfo,
         LoaderSettings = {TheMimicLoader = {Load_Sections = true}, UIKeybind = "RightControl", AllowClientTab = false, AllowAcrylicBlur = false, ESPMode = "Slate"},
         LoadingSignal = signal(ctx), ESPObjects = {}, RegisterCleanup = ctx.addCleanup,
-        Title = "MIMIC / " .. scope, LowerC = hookfunction or hookfunc,
+        Title = "Nevoirs / " .. scope, LowerC = hookfunction or hookfunc,
         Task = trackedTask,
     }
     gg.Dispatch = function(fn, ...)
@@ -10429,13 +10429,13 @@ end)
 
     local function addOverview(chapter)
         local tab = ctx.Overview
-        tab:Paragraph({Title = "Mimic Slate", Desc = "A shared interface for every chapter. Open Chapter for the current area, Visuals for markers, and Player for movement."})
+        tab:Paragraph({Title = "Nevoirs / " .. scope, Desc = "Main: nhiệm vụ và dịch chuyển · Chiến đấu: Nearby Kill · ESP: hiển thị · Cá nhân: di chuyển · Cài đặt: cấu hình."})
         if tab.Status then
             ctx.OverviewStatus = tab:Status({Title = "Session", Icon = "activity", State = "active", Fields = {Package = scope, Chapter = chapter or "Lobby / unknown", Player = player.DisplayName, Interface = ctx.UISource}})
         else
             tab:Paragraph({Title = scope .. " / " .. (chapter or "Lobby"), Desc = player.DisplayName})
         end
-        if ctx.UIError then tab:Paragraph({Title = "Using included interface", Desc = "The remote UI could not be downloaded. The included Slate interface is active."}) end
+        if ctx.UIError then tab:Paragraph({Title = "Đang dùng UI đi kèm", Desc = "Không tải được UI raw. Bản WindUI của cc đã nhúng đang được sử dụng."}) end
         tab:Section({Title = "Quick actions"})
         tab:Button({Title = "Stop chapter actions", Icon = "square", Desc = "Stops active tasks and resets chapter switches.", Callback = function()
             scheduler.Destroy()
@@ -10458,8 +10458,8 @@ end)
     local function addSettings(window)
         local tab = window:Tab({Title = "Settings", Icon = "settings"})
         tab:Section({Title = "Interface"})
-        tab:Slider({Title = "Interface scale", Desc = "Adjusts the menu size for your screen.", Value = {Min = 0.65, Max = 1.25, Default = tonumber(ctx.Config.Interface.Scale) or 1}, Step = 0.05, Callback = function(value)
-            ctx.Config.Interface.Scale = value; window:SetUIScale(value); ctx.Save()
+        tab:Slider({Title = "UI Scale", Desc = "Điều chỉnh kích thước giao diện.", Value = {Min = 0.58, Max = 0.90, Default = tonumber(ctx.Config.Interface.CCScale) or (services.UserInputService.TouchEnabled and 0.62 or 0.60)}, Step = 0.01, Callback = function(value)
+            ctx.Config.Interface.CCScale = value; window:SetUIScale(value); ctx.Save()
         end})
         tab:Keybind({Title = "Menu key", Value = Enum.KeyCode.RightControl, ChangedCallback = function(key) window:SetToggleKey(key) end})
         tab:Slider({Title = "Travel speed", Desc = "Used by chapter routes that do not specify a duration.", Value = {Min = 10, Max = 200, Default = tonumber(ctx.Config.Interface.TravelSpeed) or 85}, Step = 5, Callback = function(value) ctx.Config.Interface.TravelSpeed = value; ctx.Save() end})
@@ -10467,7 +10467,7 @@ end)
         tab:Button({Title = "Save preferences", Icon = "save", Callback = function()
             ctx.Notify(saveNow() and "Preferences saved" or "Session preferences", type(writefile) == "function" and "Saved on this device." or "File storage is unavailable; preferences last for this session.")
         end})
-        tab:Paragraph({Title = "Mimic Slate " .. VERSION, Desc = "UI: Slate · Package: " .. scope .. "\nUse the floating M button to open the menu on mobile."})
+        tab:Paragraph({Title = "Nevoirs " .. VERSION, Desc = "UI gốc cc / WindUI · " .. scope .. "\nRightCtrl hoặc avatar bên trái để ẩn/hiện menu."})
     end
     gg.AttachWindow = function(window, tabs, functions, chapter)
         ctx.Window = window; ctx.LegacyFunctions = functions; ctx.Chapter = chapter
@@ -10488,7 +10488,7 @@ end)
         ctx.Visuals.BuildTabs(window)
         if extensions then extensions.BuildTabs(window, chapter) end
         addSettings(window)
-        window:SetUIScale(tonumber(ctx.Config.Interface.Scale) or 1)
+        window:SetUIScale(math.clamp(tonumber(ctx.Config.Interface.CCScale) or (services.UserInputService.TouchEnabled and 0.62 or 0.60), 0.58, 0.90))
         window:SelectTab(1)
     end
 
@@ -10537,7 +10537,7 @@ end)()
 
 local E = (getgenv and getgenv()) or _G
 
-return Runtime.start({Scope="Book2",Modules=Modules,UIUrl=E.MimicSlateUIUrl or "https://raw.githubusercontent.com/eystearisdown/wyattrz/main/ui/SlateUI.lua"})
+return Runtime.start({Scope="Book2",Modules=Modules,UIUrl=E.MimicCCUIUrl or "https://raw.githubusercontent.com/eystearisdown/wyattrz/main/ui/CCUI.lua"})
 
 ]====]
 local E = (getgenv and getgenv()) or _G
