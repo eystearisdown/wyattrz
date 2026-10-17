@@ -1,3073 +1,5507 @@
--- Mimic CC UI 1.1.0 / Book3
--- Loads the original cc WindUI from your shared GitHub UI file.
--- Book2 includes all supplied Paintings coordinates; no painting download is needed.
-local PAYLOAD = [====[
--- Generated from the maintained source modules. No GG loader is required.
-local Modules = {}
+-- CC Upgrade · Aura Test 1 · source: user cc Friendly Radar
+-- Nevoirs - Rage • B3C1 Friendly Radar Edition
+-- Stable base + compact friendly boss radar + original nevoirs.lua FleshBlock targeting logic.
 
-Modules.VisualsPlayer = function()
--- Slate: a shared ESP renderer and reversible local-player controller.
--- The module deliberately uses no remote UI, Drawing API, or per-label loops.
-return function(ctx)
-    local S = ctx.Services
-    local Players, Run, Input = S.Players, S.RunService, S.UserInputService
-    local Lighting, World, Prompts = S.Lighting, S.Workspace, S.ProximityPromptService
-    local player = ctx.Player
-    ctx.Config.Client = ctx.Config.Client or {}
-    ctx.Config.Client.Client = ctx.Config.Client.Client or {}
-    ctx.Config.SlateESP = ctx.Config.SlateESP or {}
-    local client, settings = ctx.Config.Client.Client, ctx.Config.SlateESP
-    local function default(t, key, value) if t[key] == nil then t[key] = value end end
-    default(client, "VFly", false)
-    default(client, "VFlySpeed", 60)
-    default(client, "TPWalkSpeed", 35)
-    default(client, "Enable TeleportWalk", false)
-    default(client, "Noclip", false)
-    default(client, "Moonwalk", false)
-    default(client, "Full Bright", false)
-    default(client, "InstantPrompt", false)
-    default(client, "FlyKeyEnabled", true)
-    default(settings, "Enabled", true)
-    default(settings, "Distance", 1800)
-    default(settings, "Labels", true)
-    default(settings, "Outlines", true)
-    default(settings, "Players", false)
-    default(settings, "Threats", true)
-    default(settings, "Objectives", true)
-    default(settings, "Currency", true)
-    default(settings, "AvoidOverlap", true)
-    default(settings, "LabelBudget", 60)
-    local function number(value, fallback, low, high)
-        local n = tonumber(value)
-        if not n or n ~= n or n == math.huge or n == -math.huge then n = fallback end
-        return math.clamp(n, low, high)
+pcall(function()
+    local pg = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        for _, name in ipairs({"Nevoirs_Rage_UI", "Nevoirs_Mimic_UI", "MiniIY_UI", "Nevoirs_LeftToggle_UI", "Nevoirs_Radar_UI", "FiHon_CompactNotifications"}) do
+            local old = pg:FindFirstChild(name)
+            if old then old:Destroy() end
+        end
     end
-    settings.Distance = number(settings.Distance, 1800, 100, 6000)
-    settings.LabelBudget = number(settings.LabelBudget, 60, 10, 80)
-    client.VFlySpeed = number(client.VFlySpeed, 60, 5, 250)
-    client.TPWalkSpeed = number(client.TPWalkSpeed, 35, 1, 200)
-    local live, connections, registry, categories = true, {}, {}, {}
-    local palette = {
-        Players = Color3.fromRGB(104, 226, 193),
-        Threats = Color3.fromRGB(255, 126, 119),
-        Objectives = Color3.fromRGB(116, 184, 255),
-        Currency = Color3.fromRGB(246, 203, 108),
-        Complete = Color3.fromRGB(104, 226, 193),
-        Pending = Color3.fromRGB(246, 203, 108),
+end)
+pcall(function()
+    if type(_G.__NevoirsB3C1Cleanup) == "function" then
+        _G.__NevoirsB3C1Cleanup()
+    end
+end)
+_G.NevoirsMimic_Loaded = true
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting         = game:GetService("Lighting")
+local LocalPlayer      = Players.LocalPlayer
+local Workspace        = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService       = game:GetService("HttpService")
+local WindUI -- one shared UI binding for all feature closures
+
+-- Avatar/icon mặc định theo yêu cầu.
+local NEVOIRS_AVATAR_ID = "rbxassetid://98606201759935"
+local NEVOIRS_WINDOW_ICON = NEVOIRS_AVATAR_ID
+local NEVOIRS_BRAND_TEXT = "N"
+local NEVOIRS_BRAND_COLOR = Color3.fromRGB(94, 170, 255)
+local NEVOIRS_UI_ICON = NEVOIRS_AVATAR_ID
+local CAMERAREPLICA = nil -- silent camera replica cho Auto Nearby Kill; không xoay camera thật
+
+pcall(function()
+    if type(_G.__NevoirsLastNoclipCleanup) == "function" then
+        _G.__NevoirsLastNoclipCleanup()
+    end
+    if type(_G.__NevoirsLastMoonwalkCleanup) == "function" then
+        _G.__NevoirsLastMoonwalkCleanup()
+    end
+end)
+
+-- ── States ────────────────────────────────────────────────────────────────────
+local States = {
+    TPWalk       = false,
+    Noclip       = false,
+    Moonwalk     = false,
+    InfiniteJump  = false,
+    ESPPlayer    = false,
+    ESPMonster   = false,
+    ESPTaskMaster = false,
+    ESPTaskBody      = false,
+    ESPTaskSpider    = false,
+    ESPTaskGenerator = false,
+    ESPTaskTerminal  = false,
+    ESPTaskValve     = false,
+    ESPTaskWire      = false,
+    ESPTaskDirector  = false,
+    ESPTaskExtra     = false,
+    Fullbright   = false,
+    AutoNearbyKill = false,
+    AutoYenESP = false,
+    AutoYenCollect = false,
+    InstantInteract = false,
+    BossRadar = false,
+}
+
+-- ── Persistent settings (executor workspace) ────────────────────────────────
+local SETTINGS_FILE = "Nevoirs_B3C1_Settings.json"
+
+local DEFAULT_SETTINGS = {
+    TPWalkSpeed = 0,
+    VFlySpeed = 0,
+
+    AutoKillFireDelay = 0.03,
+    AutoKillRangeGata = 70,
+    AutoKillRangeHogo = 25,
+    AutoKillRangeFleshBlock = 20,
+    AutoKillRangeSpider = 20,
+    BossRadarRange = 700,
+}
+
+local SavedSettings = {}
+
+local function __readSettings()
+    if type(readfile) ~= "function" or type(isfile) ~= "function" then return end
+    local ok, exists = pcall(isfile, SETTINGS_FILE)
+    if not ok or not exists then return end
+    local okRead, raw = pcall(readfile, SETTINGS_FILE)
+    if not okRead or type(raw) ~= "string" or raw == "" then return end
+    local okDecode, data = pcall(function()
+        return HttpService:JSONDecode(raw)
+    end)
+    if okDecode and type(data) == "table" then
+        SavedSettings = data
+    end
+end
+
+local function __writeSettings()
+    if type(writefile) ~= "function" then return end
+    pcall(function()
+        writefile(SETTINGS_FILE, HttpService:JSONEncode(SavedSettings))
+    end)
+end
+
+local function getSetting(key, defaultValue)
+    if SavedSettings[key] ~= nil then
+        local n = tonumber(SavedSettings[key])
+        if n ~= nil then return n end
+        return SavedSettings[key]
+    end
+    return defaultValue
+end
+
+local function setSetting(key, value)
+    SavedSettings[key] = value
+    __writeSettings()
+end
+
+local function getNumberSetting(key, defaultValue, minValue, maxValue)
+    local n = tonumber(getSetting(key, defaultValue))
+    if n == nil or n ~= n or n == math.huge or n == -math.huge then
+        n = defaultValue
+    end
+    if minValue ~= nil and n < minValue then n = minValue end
+    if maxValue ~= nil and n > maxValue then n = maxValue end
+    return n
+end
+
+__readSettings()
+
+-- Migration nhẹ cho bản này: delay mặc định 0.03, Hogo 25, FleshBlock 20, Spider 10.
+-- Không overwrite nếu bạn đã tự nhập giá trị khác các mặc định cũ.
+if SavedSettings.__RangeSchema ~= "delay003_hogo25_flesh20_spider10_grunts_v4" then
+    local oldDelay = tonumber(SavedSettings.AutoKillFireDelay)
+    if oldDelay == nil or oldDelay == 0.12 then
+        SavedSettings.AutoKillFireDelay = DEFAULT_SETTINGS.AutoKillFireDelay
+    end
+
+    local oldHogo = tonumber(SavedSettings.AutoKillRangeHogo)
+    if oldHogo == nil or oldHogo == 70 then
+        SavedSettings.AutoKillRangeHogo = DEFAULT_SETTINGS.AutoKillRangeHogo
+    end
+
+    local oldFlesh = tonumber(SavedSettings.AutoKillRangeFleshBlock)
+    if oldFlesh == nil or oldFlesh == 70 or oldFlesh == 10 then
+        SavedSettings.AutoKillRangeFleshBlock = DEFAULT_SETTINGS.AutoKillRangeFleshBlock
+    end
+
+    local oldSpider = tonumber(SavedSettings.AutoKillRangeSpider)
+    if oldSpider == nil or oldSpider == 38 or oldSpider == 20 then
+        SavedSettings.AutoKillRangeSpider = DEFAULT_SETTINGS.AutoKillRangeSpider
+    end
+
+    SavedSettings.__RangeSchema = "delay003_hogo25_flesh20_spider10_grunts_v4"
+    __writeSettings()
+end
+
+local TPWalkSpeed = getNumberSetting("TPWalkSpeed", DEFAULT_SETTINGS.TPWalkSpeed, 0, 9999)
+
+
+local OrigLighting = {
+    Brightness     = Lighting.Brightness,
+    GlobalShadows  = Lighting.GlobalShadows,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    Ambient        = Lighting.Ambient,
+    FogEnd         = Lighting.FogEnd,
+}
+
+local MonsterAllows = {
+    Gata = true,
+    Boss = true,
+}
+
+local TaskAllows = {
+    Body = true,
+    Spider = true,
+    Generator = true,
+    Terminal = true,
+    Valve = true,
+    Wire = true,
+    Director = true,
+    BoulderSeal = true,
+    Cutter = true,
+    Bandage = true,
+    Diary = true,
+    EntranceCard = true,
+    C4 = true,
+    PowerSwitch = true,
+}
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name           = "Nevoirs_Rage_UI"
+ScreenGui.ResetOnSpawn   = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent         = LocalPlayer:WaitForChild("PlayerGui")
+
+local C_DIM = Color3.fromRGB(120, 120, 145)
+
+-- ── Misc helpers ──────────────────────────────────────────────────────────────
+local function getChar()     return LocalPlayer.Character end
+local function getHRP(char)  return char and char:FindFirstChild("HumanoidRootPart") end
+
+local function safeFolder(path)
+    local cur = Workspace
+    for _, name in ipairs(path) do
+        cur = cur and cur:FindFirstChild(name)
+        if not cur then return nil end
+    end
+    return cur
+end
+
+local function validPart(p)
+    return p and p.Parent and p:IsDescendantOf(game) and p:IsA("BasePart")
+end
+
+local function validAdornee(obj)
+    return obj and obj.Parent and obj:IsDescendantOf(game) and (obj:IsA("BasePart") or obj:IsA("Model"))
+end
+
+local function rootOf(obj)
+    if not obj or not obj.Parent then return nil end
+    if obj:IsA("BasePart") then return obj end
+    return obj:FindFirstChild("HumanoidRootPart")
+        or obj:FindFirstChild("Head")
+        or obj:FindFirstChild("Hitbox")
+        or obj:FindFirstChild("PromptPart")
+        or obj:FindFirstChildWhichIsA("BasePart")
+end
+
+local function makeUniqueKey(base, inst)
+    local id
+    pcall(function()
+        id = inst and inst:GetDebugId()
+    end)
+    if not id then
+        pcall(function()
+            id = inst and inst:GetFullName()
+        end)
+    end
+    id = id or tostring(inst)
+    return base .. "_" .. tostring(id)
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- RADAR LA BÀN 2D • vị trí ngang thật, camera độc lập HRP/Moonwalk
+-- N = -Z theo trục thế giới Roblox; không có dữ liệu tường/phòng.
+-- ══════════════════════════════════════════════════════════════════════════════
+local BossRadarRange = getNumberSetting("BossRadarRange", DEFAULT_SETTINGS.BossRadarRange, 50, 5000)
+local radarConn = nil
+
+local RadarGui = Instance.new("ScreenGui")
+RadarGui.Name = "Nevoirs_Radar_UI"
+RadarGui.ResetOnSpawn = false
+RadarGui.IgnoreGuiInset = true
+RadarGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+RadarGui.DisplayOrder = 999997
+RadarGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- API name retained for callers from the original cc.
+local Radar3D = (function()
+    local function boolSetting(key, fallback)
+        local value = getSetting(key, fallback)
+        if type(value) == "boolean" then return value end
+        return fallback
+    end
+    local config = {
+        CameraUp = boolSetting("RadarCameraUp", true),
+        Bosses = boolSetting("RadarBosses", true),
+        Creeps = boolSetting("RadarCreeps", false),
+        Names = boolSetting("RadarNames", false),
+        Height = boolSetting("RadarHeight", true),
+        CombatMarker = boolSetting("RadarCombatMarker", true),
+        Size = getNumberSetting("RadarSize", UserInputService.TouchEnabled and 180 or 190, 150, 280),
+        Opacity = getNumberSetting("RadarOpacity", 0.84, 0.35, 1),
+        X = getNumberSetting("RadarPositionX", 0.76, 0, 1),
+        Y = getNumberSetting("RadarPositionY", 0.10, 0, 1),
+        Move = false,
     }
-    local symbols = { Players = "●", Threats = "◆", Objectives = "◇", Currency = "¥" }
-    local overlay = Instance.new("Folder")
-    overlay.Name = "Slate_Visuals"
-    overlay.Parent = World
-    local function connect(signal, fn)
-        local c = signal:Connect(fn)
-        connections[#connections + 1] = c
-        return c
-    end
-    local function save() if ctx.Save then ctx.Save() end end
-    local function notify(title, content) if ctx.Notify then ctx.Notify(title, content) end end
-    local function new(class, props, parent)
-        local object = Instance.new(class)
-        for key, value in pairs(props or {}) do object[key] = value end
+    local palette = {
+        Background = Color3.fromRGB(12, 17, 25),
+        Line = Color3.fromRGB(105, 129, 154),
+        Text = Color3.fromRGB(224, 232, 242),
+        Muted = Color3.fromRGB(148, 164, 183),
+        Boss = Color3.fromRGB(255, 114, 122),
+        Creep = Color3.fromRGB(241, 183, 103),
+        Self = Color3.fromRGB(124, 204, 246),
+        Focus = Color3.fromRGB(255, 220, 125),
+    }
+    local alive, records, lastScan, selected, combatTarget = true, {}, -math.huge, nil, nil
+    local connections, buttons, compass, rays = {}, {}, {}, {}
+    local dragging, dragInput, dragOrigin, dragPointer = false, nil, nil, nil
+    local lastHeading = Vector3.new(0, 0, -1)
+    local nextErrorWarn = 0
+    local api = {Config = config}
+
+    local function create(className, name, parent, properties)
+        local object = Instance.new(className)
+        object.Name = name
+        for key, value in pairs(properties or {}) do object[key] = value end
         object.Parent = parent
         return object
     end
-    local function isInWorld(object)
-        return object and object.Parent and object:IsDescendantOf(World)
+    local function corner(parent, radius)
+        create("UICorner", "Round", parent, {CornerRadius = UDim.new(radius or 1, 0)})
     end
-    local function anchorOf(object)
+    local function outline(parent, color, transparency, thickness)
+        return create("UIStroke", "Outline", parent, {
+            Color = color, Transparency = transparency or 0.5, Thickness = thickness or 1,
+        })
+    end
+    local function label(parent, name, text, size, color)
+        return create("TextLabel", name, parent, {
+            BackgroundTransparency = 1, BorderSizePixel = 0,
+            Font = Enum.Font.GothamMedium, TextSize = size or 10,
+            TextColor3 = color or palette.Text, Text = text or "",
+            TextTruncate = Enum.TextTruncate.AtEnd,
+        })
+    end
+    local root = create("Frame", "CompassRadar", RadarGui, {
+        BackgroundColor3 = palette.Background, BorderSizePixel = 0,
+        BackgroundTransparency = 1 - config.Opacity, Visible = false,
+    })
+    corner(root, 0.06)
+    local rootScale = create("UIScale", "SmallScreenFit", root, {Scale = 1})
+    local border = outline(root, palette.Line, 0.55)
+    local header = create("TextButton", "MoveHandle", root, {
+        BackgroundTransparency = 1, BorderSizePixel = 0, AutoButtonColor = false,
+        Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -16, 0, 26),
+        Font = Enum.Font.GothamBold, TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = palette.Text, Text = "RADAR · CAMERA",
+    })
+    local chart = create("Frame", "Plane", root, {
+        BackgroundColor3 = Color3.fromRGB(19, 29, 40), BackgroundTransparency = 0.25,
+        BorderSizePixel = 0, Position = UDim2.fromOffset(10, 26),
+    })
+    corner(chart)
+    outline(chart, palette.Line, 0.45)
+    local rings = {}
+    for _, scale in ipairs({0.5, 0.80}) do
+        local ring = create("Frame", "DistanceRing", chart, {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.fromScale(scale, scale), BackgroundTransparency = 1, BorderSizePixel = 0,
+        })
+        corner(ring)
+        table.insert(rings, outline(ring, palette.Line, 0.79, 0.8))
+    end
+    for index = 1, 11 do
+        rays[index] = create("Frame", "CameraFOV", chart, {
+            AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = palette.Self,
+            BackgroundTransparency = (index == 1 or index == 11) and 0.76 or 0.91,
+            BorderSizePixel = 0, ZIndex = 2,
+        })
+    end
+    for _, item in ipairs({{"N",0,-1},{"E",1,0},{"S",0,1},{"W",-1,0}}) do
+        local text = label(chart, "Compass" .. item[1], item[1], 9, palette.Muted)
+        text.AnchorPoint = Vector2.new(0.5, 0.5)
+        text.Size = UDim2.fromOffset(16, 14)
+        text.ZIndex = 5
+        table.insert(compass, {Text = text, Vector = Vector3.new(item[2], 0, item[3])})
+    end
+    local centerHalo = create("Frame", "SelfHalo", chart, {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(12, 12), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 7,
+    })
+    corner(centerHalo)
+    outline(centerHalo, palette.Self, 0.48)
+    local center = create("Frame", "You", chart, {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(5, 5), BackgroundColor3 = palette.Self, BorderSizePixel = 0, ZIndex = 8,
+    })
+    corner(center)
+    local status = label(root, "Detail", "Chưa thấy boss", 10, palette.Muted)
+    status.Position = UDim2.new(0, 10, 0, config.Size + 30)
+    status.Size = UDim2.new(1, -20, 0, 30)
+    status.TextWrapped = true
+    status.TextTruncate = Enum.TextTruncate.None
+    status.TextYAlignment = Enum.TextYAlignment.Center
+    local range = label(root, "Radius", "", 9, palette.Muted)
+    range.Position = UDim2.new(0, 38, 1, -21)
+    range.Size = UDim2.new(1, -76, 0, 18)
+    local function miniButton(name, caption, x)
+        local button = create("TextButton", name, root, {
+            AnchorPoint = Vector2.new(x < 0 and 1 or 0, 1),
+            Position = x < 0 and UDim2.new(1, x, 1, -3) or UDim2.new(0, x, 1, -3),
+            Size = UDim2.fromOffset(30, 22), BackgroundColor3 = Color3.fromRGB(34, 47, 63),
+            BackgroundTransparency = 0.15, BorderSizePixel = 0, AutoButtonColor = true,
+            Font = Enum.Font.GothamBold, TextColor3 = palette.Text, TextSize = 13, Text = caption,
+        })
+        corner(button, 0.2)
+        return button
+    end
+    local zoomIn = miniButton("ZoomIn", "+", 5)
+    local zoomOut = miniButton("ZoomOut", "−", -5)
+
+    local registry = {
+        {path={"Section2","Monster","Akari"}, label="Akari"},
+        {path={"Section2","Monster","AkariNM"}, label="Akari NM"},
+        {path={"Section2","Rage","AkariRage"}, label="Akari Rage"},
+        {path={"Section2","Rage","AkariRageNM"}, label="Akari Rage NM"},
+        {path={"Section3","Monster","Mizuno"}, label="Mizuno"},
+        {path={"Section3","Monster","MizunoNM"}, label="Mizuno NM"},
+        {path={"Section4","Monster","HogoGuntai"}, label="Hogo"},
+        {path={"Section4","Monster","HogoGuntaiNM"}, label="Hogo NM"},
+        {path={"Section5","StairsSection","Monster","HogoGuntai"}, label="Hogo"},
+        {path={"Section5","StairsSection","Monster","HogoGuntaiNM"}, label="Hogo NM"},
+        {path={"Section5","Monster","Baigai"}, label="Baigai"},
+        {path={"Section5","Monster","BaigaiNM"}, label="Baigai NM"},
+    }
+    local function findAnchor(object)
         if not object or not object.Parent then return nil end
         if object:IsA("BasePart") then return object end
-        if object:IsA("Attachment") then return object.Parent:IsA("BasePart") and object.Parent or nil end
-        if object:IsA("ProximityPrompt") then return anchorOf(object.Parent) end
-        if object:IsA("Model") then
-            return object.PrimaryPart or object:FindFirstChild("HumanoidRootPart")
-                or object:FindFirstChild("Head") or object:FindFirstChildWhichIsA("BasePart", true)
+        for _, name in ipairs({"Hitbox", "HumanoidRootPart", "RootPart", "Head"}) do
+            local part = object:FindFirstChild(name, true)
+            if validPart(part) then return part end
         end
-        return object:FindFirstChildWhichIsA("BasePart", true)
+        local part = object:FindFirstChildWhichIsA("BasePart", true)
+        return validPart(part) and part or nil
     end
-    local function semantic(category, color)
-        local name = string.lower(tostring(category))
-        if name:find("player", 1, true) then return "Players" end
-        if name:find("yen", 1, true) or name:find("currency", 1, true) then return "Currency" end
-        for _, word in ipairs({ "monster", "gata", "akari", "mizuno", "hogo", "baigai", "shinigami", "ashina", "futakuchi", "kurobozu", "ohaguro", "mother", "grindemon", "soldier", "boogey", "senzai", "enzukai", "followers" }) do
-            if name:find(word, 1, true) then return "Threats" end
+    local function living(record)
+        if not record.Model or not record.Model.Parent or not validPart(record.Anchor) then return false end
+        local hum = record.Model:FindFirstChildOfClass("Humanoid")
+        return not hum or hum.Health > 0
+    end
+    local function scan()
+        records = {}
+        local seen = {}
+        local function add(model, text, kind)
+            if not model or seen[model] then return end
+            local anchor = findAnchor(model)
+            if not anchor then return end
+            local record = {Model=model, Anchor=anchor, Label=text, Kind=kind}
+            if not living(record) then return end
+            seen[model] = true
+            table.insert(records, record)
         end
-        if typeof(color) == "Color3" and color.R > 0.65 and color.G < 0.43 and color.B < 0.55 then return "Threats" end
-        return "Objectives"
-    end
-    local function statusColor(group, color)
-        if group == "Objectives" and typeof(color) == "Color3" then
-            if color.G > 0.55 and color.R < 0.42 and color.B < 0.6 then return palette.Complete end
-            if color.R > 0.65 and color.G > 0.55 and color.B < 0.45 then return palette.Pending end
-        end
-        return palette[group]
-    end
-    local function destroyGraphics(entry)
-        if entry.highlight then entry.highlight:Destroy(); entry.highlight = nil end
-        if entry.billboard then entry.billboard:Destroy(); entry.billboard = nil end
-        entry.label, entry.dot, entry.stroke = nil, nil, nil
-    end
-    local function hide(entry)
-        destroyGraphics(entry)
-    end
-    local function makeOutline(entry)
-        if entry.highlight then return end
-        local adornee = entry.object
-        if not adornee:IsA("Model") and not adornee:IsA("BasePart") then adornee = entry.anchor end
-        entry.highlight = new("Highlight", {
-            Name = "Slate_Outline", Adornee = adornee, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
-            FillColor = entry.color, OutlineColor = entry.color, FillTransparency = 0.94,
-            OutlineTransparency = 0.18, Enabled = false,
-        }, overlay)
-    end
-    local function labelOffset(entry)
-        if entry.offset then return entry.offset end
-        local sizeY = entry.anchor.Size.Y
-        if entry.object:IsA("Model") then
-            local ok, extents = pcall(entry.object.GetExtentsSize, entry.object)
-            if ok then sizeY = extents.Y end
-        end
-        entry.offset = Vector3.new(0, math.clamp(sizeY * 0.5 + 0.8, 1.3, 8), 0)
-        return entry.offset
-    end
-    local function makeLabel(entry)
-        if entry.billboard then return end
-        local billboard = new("BillboardGui", {
-            Name = "Slate_Label", Adornee = entry.anchor, AlwaysOnTop = true,
-            LightInfluence = 0, MaxDistance = settings.Distance,
-            Size = UDim2.fromOffset(190, 24), StudsOffsetWorldSpace = labelOffset(entry),
-            Enabled = false,
-        }, overlay)
-        local capsule = new("Frame", {
-            Name = "Capsule", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(15, 20, 27),
-            BackgroundTransparency = 0.12, BorderSizePixel = 0,
-        }, billboard)
-        new("UICorner", { CornerRadius = UDim.new(0, 7) }, capsule)
-        entry.stroke = new("UIStroke", { Color = entry.color, Transparency = 0.55, Thickness = 1 }, capsule)
-        entry.dot = new("TextLabel", {
-            BackgroundTransparency = 1, Position = UDim2.fromOffset(7, 0), Size = UDim2.fromOffset(17, 24),
-            Font = Enum.Font.GothamBold, TextSize = 11, Text = symbols[entry.group], TextColor3 = entry.color,
-        }, capsule)
-        entry.label = new("TextLabel", {
-            BackgroundTransparency = 1, Position = UDim2.fromOffset(27, 0), Size = UDim2.new(1, -35, 1, 0),
-            Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = Color3.fromRGB(229, 237, 246),
-            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, RichText = false,
-            Text = entry.text,
-        }, capsule)
-        entry.billboard = billboard
-    end
-    local ESPF = {}
-    local nullHandle = { UpdateColor = function() end, UpdateText = function() end, Destroy = function() end, Visualize = function() end }
-    function ESPF.ESP(category, object, opts)
-        if not live or typeof(object) ~= "Instance" then return nullHandle end
-        opts = opts or {}
-        category = tostring(category or "Objectives")
-        local bucket = categories[category]
-        if not bucket then bucket = { enabled = true, objects = {} }; categories[category] = bucket end
-        local old = bucket.objects[object]
-        if old and not old.dead then
-            if opts.Text ~= nil then old.handle.UpdateText(opts.Text) end
-            if opts.Color then old.handle.UpdateColor(opts.Color) end
-            return old.handle
-        end
-        -- Registrations are cheap; GPU objects are allocated only for the active budget.
-        local group = semantic(category, opts.Color)
-        local entry = {
-            category = category, object = object, anchor = anchorOf(object), group = group,
-            text = tostring(opts.Text or object.Name), color = statusColor(group, opts.Color), dead = false,
-        }
-        local handle = {}
-        entry.handle = handle
-        function handle.UpdateColor(first, second)
-            local color = second or first
-            if entry.dead then return end
-            entry.color = statusColor(entry.group, color)
-            if entry.highlight then entry.highlight.FillColor = entry.color; entry.highlight.OutlineColor = entry.color end
-            if entry.dot then entry.dot.TextColor3 = entry.color end
-            if entry.stroke then entry.stroke.Color = entry.color end
-        end
-        function handle.UpdateText(first, second)
-            if not entry.dead then entry.text = tostring(second or first or "") end
-        end
-        function handle.Destroy()
-            if entry.dead then return end
-            entry.dead = true
-            bucket.objects[object] = nil
-            registry[entry] = nil
-            destroyGraphics(entry)
-            -- Some original game handlers attach their own one-shot property connection.
-            for _, key in ipairs({ "PropChange", "ChangeSignal" }) do
-                if handle[key] then pcall(handle[key].Disconnect, handle[key]); handle[key] = nil end
-            end
-        end
-        function handle.Visualize() end -- renderer is shared, legacy 2D callbacks are harmless.
-        bucket.objects[object], registry[entry] = entry, true
-        return handle
-    end
-    function ESPF.Visible(category, value)
-        category = tostring(category)
-        local bucket = categories[category]
-        if not bucket then bucket = { enabled = value == true, objects = {} }; categories[category] = bucket end
-        bucket.enabled = value == true
-        if not bucket.enabled then
-            for _, entry in pairs(bucket.objects) do hide(entry) end
-        end
-    end
-    function ESPF.Method() return "Slate" end
-    local lastPlayerScan, candidates = 0, {}
-    local function scanPlayers()
-        if not settings.Players then return end
-        for _, target in ipairs(Players:GetPlayers()) do
-            if target ~= player and target.Character and target.Character.Parent then
-                local name = target.DisplayName ~= target.Name and (target.DisplayName .. " @" .. target.Name) or target.Name
-                ESPF.ESP("Players", target.Character, { Text = name, Color = palette.Players })
-            end
-        end
-    end
-    local function updateESP()
-        local camera = World.CurrentCamera
-        if not camera then return end
-        local origin = camera.CFrame.Position
-        local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-        if root then origin = root.Position end
-        table.clear(candidates)
-        local now = os.clock()
-        if now - lastPlayerScan >= 1 then lastPlayerScan = now; scanPlayers() end
-        for entry in pairs(registry) do
-            if entry.dead or not isInWorld(entry.object) then
-                entry.handle.Destroy()
-            else
-                if not entry.anchor or not isInWorld(entry.anchor) then entry.anchor = anchorOf(entry.object); entry.offset = nil; destroyGraphics(entry) end
-                local bucket = categories[entry.category]
-                if entry.anchor and settings.Enabled and bucket.enabled and settings[entry.group] then
-                    local distance = (entry.anchor.Position - origin).Magnitude
-                    if distance <= settings.Distance then
-                        entry.distance = distance
-                        entry.screen, entry.onScreen = camera:WorldToViewportPoint(entry.anchor.Position)
-                        entry.labelScreen, entry.labelOnScreen = camera:WorldToViewportPoint(entry.anchor.Position + labelOffset(entry))
-                        candidates[#candidates + 1] = entry
-                    else hide(entry) end
-                else hide(entry) end
-            end
-        end
-        table.sort(candidates, function(a, b)
-            local aWeight = a.distance + (a.group == "Threats" and -35 or 0)
-            local bWeight = b.distance + (b.group == "Threats" and -35 or 0)
-            return aWeight < bWeight
-        end)
-        local outlineCount, labelCount, rectangles = 0, 0, {}
-        for _, entry in ipairs(candidates) do
-            local showOutline = settings.Outlines and outlineCount < 28 and entry.onScreen
-            if showOutline then
-                makeOutline(entry)
-                entry.highlight.Enabled = true
-                outlineCount = outlineCount + 1
-            elseif entry.highlight then
-                -- Disabled Highlights can still consume engine slots, so release them.
-                entry.highlight:Destroy(); entry.highlight = nil
-            end
-            local showLabel = settings.Labels and labelCount < settings.LabelBudget and entry.labelOnScreen and entry.labelScreen.Z > 0
-            local width = math.clamp(58 + #entry.text * 5.7, 108, 238)
-            local rect = { entry.labelScreen.X - width / 2, entry.labelScreen.Y - 12, entry.labelScreen.X + width / 2, entry.labelScreen.Y + 12 }
-            if showLabel and settings.AvoidOverlap then
-                for _, other in ipairs(rectangles) do
-                    if rect[1] < other[3] + 4 and rect[3] + 4 > other[1] and rect[2] < other[4] + 3 and rect[4] + 3 > other[2] then showLabel = false; break end
+        if config.Bosses then
+            for _, entry in ipairs(registry) do
+                local object = safeFolder(entry.path)
+                if not object then
+                    local parentPath = {}
+                    for i = 1, #entry.path-1 do parentPath[i] = entry.path[i] end
+                    local parent = safeFolder(parentPath)
+                    object = parent and parent:FindFirstChild(entry.path[#entry.path], true)
                 end
-            end
-            if showLabel then
-                makeLabel(entry)
-                entry.billboard.Adornee = entry.anchor
-                entry.billboard.MaxDistance = settings.Distance
-                entry.billboard.Size = UDim2.fromOffset(width, 24)
-                entry.billboard.Enabled = true
-                entry.label.Text = entry.text .. " · " .. tostring(math.floor(entry.distance + 0.5)) .. " st"
-                entry.label.TextTransparency = entry.distance > settings.Distance * 0.85 and 0.25 or 0
-                rectangles[#rectangles + 1] = rect
-                labelCount = labelCount + 1
-            elseif entry.billboard then
-                -- Do not retain hundreds of UI instances after visiting a dense area.
-                entry.billboard:Destroy(); entry.billboard, entry.label, entry.dot, entry.stroke = nil, nil, nil, nil
+                add(object, entry.label, "Boss")
             end
         end
-    end
-
-    -- Player controls share lifecycle/priority; cc flight keeps its RenderStepped update.
-    local character, humanoid, root = nil, nil, nil
-    local collisionCache = setmetatable({}, { __mode = "k" })
-    local rotationCache, flyRecord, floatRecord = nil, nil, nil
-    local forcedFloat = "None"
-    local promptCache = setmetatable({}, { __mode = "k" })
-    local instantWas, lightingRecord, lightApplying = false, nil, false
-    local environmentOwners, lightDesired = {}, {}
-    local atmosphereCache = setmetatable({}, { __mode = "k" })
-    local windowFocused = true
-    local brightness = {
-        Brightness = 2, ClockTime = 14, FogEnd = 1000000, GlobalShadows = false,
-        Ambient = Color3.fromRGB(178, 184, 193), OutdoorAmbient = Color3.fromRGB(178, 184, 193), ExposureCompensation = 0.25,
-    }
-    local function restoreCollision()
-        for part, value in pairs(collisionCache) do
-            if part.Parent then pcall(function() part.CanCollide = value end) end
-            collisionCache[part] = nil
-        end
-    end
-    local function restoreRotation()
-        if rotationCache then
-            if rotationCache.hum.Parent then rotationCache.hum.AutoRotate = rotationCache.value end
-            rotationCache = nil
-        end
-    end
-    local function stopFly()
-        if not flyRecord then return end
-        local record = flyRecord
-        flyRecord = nil
-        if record.stateConnection then record.stateConnection:Disconnect() end
-        if record.velocity then record.velocity:Destroy() end
-        if record.orientation then record.orientation:Destroy() end
-        if record.hum and record.hum.Parent then
-            record.hum.WalkSpeed = record.walkSpeed
-            if record.hum.Health > 0 then record.hum:ChangeState(Enum.HumanoidStateType.Running) end
-        end
-        if record.root and record.root.Parent then
-            record.root.AssemblyLinearVelocity = Vector3.zero
-            record.root.AssemblyAngularVelocity = Vector3.zero
-        end
-        if not client.Moonwalk then restoreRotation() end
-    end
-    local function stopFloat()
-        if floatRecord then
-            if floatRecord.force then floatRecord.force:Destroy() end
-            if floatRecord.attachment then floatRecord.attachment:Destroy() end
-            floatRecord = nil
-        end
-    end
-    local function onCharacter(char)
-        if character == char then return end
-        stopFly(); stopFloat(); restoreCollision(); restoreRotation()
-        character, humanoid, root = char, nil, nil
-        forcedFloat = "None"
-    end
-    local function suppressRotation()
-        if not humanoid then return end
-        if not rotationCache or rotationCache.hum ~= humanoid then
-            restoreRotation()
-            rotationCache = { hum = humanoid, value = humanoid.AutoRotate }
-        end
-        humanoid.AutoRotate = false
-    end
-    local function beginFly()
-        if flyRecord or not root or not humanoid then return end
-        stopFloat()
-        -- Keep cc's original force constants and camera/joystick feel.
-        local orientation = new("BodyGyro", {
-            Name = "Slate_FlightOrientation", MaxTorque = Vector3.new(9e9, 9e9, 9e9),
-            P = 9e4, D = 1e3, CFrame = root.CFrame,
-        }, root)
-        local velocity = new("BodyVelocity", {
-            Name = "Slate_FlightVelocity", MaxForce = Vector3.new(9e9, 9e9, 9e9), Velocity = Vector3.zero, P = 1e4,
-        }, root)
-        local record = { velocity = velocity, orientation = orientation, root = root, hum = humanoid, walkSpeed = humanoid.WalkSpeed }
-        flyRecord = record
-        humanoid.WalkSpeed = 0
-        humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-        record.stateConnection = humanoid.StateChanged:Connect(function(_, nextState)
-            if live and client.VFly and flyRecord == record and nextState ~= Enum.HumanoidStateType.Physics then
-                task.defer(function()
-                    if live and client.VFly and flyRecord == record and record.hum.Parent and record.hum.Health > 0 then
-                        record.hum:ChangeState(Enum.HumanoidStateType.Physics)
+        if config.Creeps then
+            for i = 1, 5 do
+                local folder = safeFolder({"Section" .. i, "Grunts"})
+                if folder then
+                    for _, model in ipairs(folder:GetDescendants()) do
+                        if model:IsA("Model") and (model:FindFirstChildOfClass("Humanoid") or model.Name:lower():find("grunt", 1, true)) then
+                            add(model, model.Name, "Creep")
+                        end
                     end
-                end)
+                end
             end
+            local objective = safeFolder({"Section4", "Lab", "Floor1", "Objective2"})
+            if objective then
+                for _, model in ipairs(objective:GetDescendants()) do
+                    if model:IsA("Model") and model.Name:lower():find("muki", 1, true) then add(model, model.Name, "Creep") end
+                end
+            end
+        end
+        lastScan = os.clock()
+    end
+    local function viewport()
+        local camera = Workspace.CurrentCamera
+        return camera and camera.ViewportSize or Vector2.new(800, 600)
+    end
+    local function safeBounds()
+        local top, bottom = Vector2.new(0, 36), Vector2.new(0, 0)
+        pcall(function() top, bottom = game:GetService("GuiService"):GetGuiInset() end)
+        local view = viewport()
+        local scale = math.clamp(math.min(1,
+            (view.X - top.X - bottom.X - 16) / (config.Size + 20),
+            (view.Y - top.Y - bottom.Y - 16) / (config.Size + 80)), 0.25, 1)
+        rootScale.Scale = scale
+        local minX, minY = top.X + 8, top.Y + 8
+        local maxX = math.max(minX, view.X - bottom.X - (config.Size + 20) * scale - 8)
+        local maxY = math.max(minY, view.Y - bottom.Y - (config.Size + 80) * scale - 8)
+        return view, minX, minY, maxX, maxY
+    end
+    local function layout()
+        local view, minX, minY, maxX, maxY = safeBounds()
+        root.Size = UDim2.fromOffset(config.Size + 20, config.Size + 80)
+        chart.Size = UDim2.fromOffset(config.Size, config.Size)
+        root.Position = UDim2.fromOffset(math.clamp(config.X * view.X, minX, maxX), math.clamp(config.Y * view.Y, minY, maxY))
+        root.BackgroundTransparency = 1 - config.Opacity
+        status.Position = UDim2.fromOffset(10, config.Size + 28)
+        header.Text = config.Move and "RADAR · KÉO TẠI ĐÂY" or (config.CameraUp and "RADAR · CAMERA" or "RADAR · N CỐ ĐỊNH")
+    end
+    local function project(vector, right, forward)
+        return vector:Dot(right), -vector:Dot(forward)
+    end
+    local function clearDots()
+        for _, item in ipairs(buttons) do item.Button.Visible = false; item.Members = {} end
+    end
+    local function setRadius(value)
+        BossRadarRange = math.clamp(math.floor(value + 0.5), 50, 5000)
+        setSetting("BossRadarRange", BossRadarRange)
+    end
+    local function dot(index)
+        if buttons[index] then return buttons[index] end
+        local button = create("TextButton", "Entity", chart, {
+            AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(24, 24),
+            BackgroundTransparency = 1, BorderSizePixel = 0, AutoButtonColor = false,
+            Text = "", ZIndex = 10,
+        })
+        local pip = create("Frame", "Dot", button, {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.fromOffset(7, 7), BorderSizePixel = 0, ZIndex = 11,
+        })
+        corner(pip)
+        local ring = outline(pip, palette.Text, 0.4, 1)
+        local name = label(button, "Caption", "", 8, palette.Text)
+        name.Position = UDim2.new(0.5, 7, 0.5, -7)
+        name.Size = UDim2.fromOffset(72, 14)
+        name.TextXAlignment = Enum.TextXAlignment.Left
+        name.ZIndex = 12
+        local count = label(button, "Cluster", "", 8, palette.Text)
+        count.Position = UDim2.new(0.5, 4, 0.5, -13)
+        count.Size = UDim2.fromOffset(18, 12)
+        count.ZIndex = 13
+        local item = {Button=button, Pip=pip, Ring=ring, Name=name, Count=count, Members={}}
+        buttons[index] = item
+        table.insert(connections, button.Activated:Connect(function()
+            local members = item.Members
+            if #members == 0 then return end
+            local nextIndex = 1
+            for i, record in ipairs(members) do if record.Model == selected then nextIndex = i % #members + 1; break end end
+            selected = members[nextIndex].Model
+            -- A radar tap only selects details. It never changes Nearby Kill.
+            api:Update()
+        end))
+        return item
+    end
+    local function render()
+        if not alive or not RadarGui.Parent then return end
+        root.Visible = States.BossRadar
+        if not States.BossRadar then clearDots(); return end
+        layout()
+        local hrp = getHRP(getChar())
+        local camera = Workspace.CurrentCamera
+        clearDots()
+        range.Text = string.format("R %d · ngang", BossRadarRange)
+        if not hrp or not camera then status.Text = "Đang chờ nhân vật/camera"; return end
+        local flat = Vector3.new(camera.CFrame.LookVector.X, 0, camera.CFrame.LookVector.Z)
+        if flat.Magnitude > 0.001 then lastHeading = flat.Unit end
+        local forward = config.CameraUp and lastHeading or Vector3.new(0, 0, -1)
+        local right = Vector3.new(-forward.Z, 0, forward.X)
+        local radius = (config.Size - 26) * 0.5
+        for _, item in ipairs(compass) do
+            local x, y = project(item.Vector, right, forward)
+            item.Text.Position = UDim2.new(0.5, x * (radius + 6), 0.5, y * (radius + 6))
+        end
+        local centerX, centerY = config.Size * 0.5, config.Size * 0.5
+        local cx, cy = project(lastHeading, right, forward)
+        local heading = math.atan2(cx, -cy)
+        local fov = math.rad(math.clamp(camera.FieldOfView, 35, 110))
+        for i, ray in ipairs(rays) do
+            local angle = heading + (i - 6) * fov / 10
+            local length = radius * 0.91
+            local dx, dy = math.sin(angle) * length, -math.cos(angle) * length
+            ray.Position = UDim2.fromOffset(centerX + dx * 0.5, centerY + dy * 0.5)
+            ray.Size = UDim2.fromOffset(length, (i == 1 or i == 11) and 1 or 2)
+            ray.Rotation = math.deg(math.atan2(dy, dx))
+        end
+        if os.clock() - lastScan > 0.65 then scan() end
+        local visible, selectedRecord, outside = {}, nil, 0
+        for _, record in ipairs(records) do
+            if living(record) then
+                local delta = record.Anchor.Position - hrp.Position
+                local horizontal = Vector3.new(delta.X, 0, delta.Z)
+                local dist = horizontal.Magnitude
+                if dist <= BossRadarRange then
+                    record.Distance, record.Height = dist, delta.Y
+                    local x, y = project(horizontal, right, forward)
+                    record.X, record.Y = x / BossRadarRange * radius, y / BossRadarRange * radius
+                    table.insert(visible, record)
+                    if record.Model == selected then selectedRecord = record end
+                else outside += 1 end
+            end
+        end
+        table.sort(visible, function(a,b) return a.Distance < b.Distance end)
+        if not selectedRecord then selected = nil end
+        -- Cluster only overlapping markers; a group's dot remains at an actual member's position.
+        local groups = {}
+        for _, record in ipairs(visible) do
+            local group
+            for _, candidate in ipairs(groups) do
+                if (candidate.X-record.X)^2 + (candidate.Y-record.Y)^2 < 12^2 then group = candidate; break end
+            end
+            if not group then group = {X=record.X, Y=record.Y, Members={}}; table.insert(groups, group) end
+            table.insert(group.Members, record)
+        end
+        local nearby = States.NearbyTarget
+        local currentCombat = type(nearby) == "table" and nearby.instance or combatTarget
+        local countShown = 0
+        for i, group in ipairs(groups) do
+            if i > 96 then break end
+            local item, representative = dot(i), group.Members[1]
+            local isCombat = false
+            for _, record in ipairs(group.Members) do
+                if record.Model == currentCombat or record.Anchor == currentCombat then isCombat = true end
+                if record.Model == selected then representative = record end
+            end
+            item.Members = group.Members
+            item.Button.Visible = true
+            item.Button.Position = UDim2.fromOffset(centerX + representative.X, centerY + representative.Y)
+            item.Pip.BackgroundColor3 = representative.Kind == "Boss" and palette.Boss or palette.Creep
+            local focused = representative.Model == selected
+            item.Pip.Size = UDim2.fromOffset(focused and 10 or (representative.Kind == "Boss" and 8 or 5), focused and 10 or (representative.Kind == "Boss" and 8 or 5))
+            item.Ring.Color = config.CombatMarker and isCombat and palette.Focus or palette.Text
+            item.Ring.Thickness = config.CombatMarker and isCombat and 2 or 1
+            item.Ring.Transparency = (focused or (config.CombatMarker and isCombat)) and 0 or 0.6
+            item.Name.Visible = config.Names and #group.Members == 1
+            item.Name.Text = representative.Label
+            item.Count.Text = #group.Members > 1 and tostring(#group.Members) or ""
+            countShown += #group.Members
+        end
+        if selectedRecord then
+            local height = config.Height and string.format(" · Δh %+.0f", selectedRecord.Height) or ""
+            status.Text = string.format("%s · %.0f stud ngang%s", selectedRecord.Label, selectedRecord.Distance, height)
+            status.TextColor3 = palette.Text
+        elseif #visible > 0 then
+            status.Text = string.format("%d mục tiêu · chạm chấm để xem%s", #visible, countShown < #visible and " · hãy zoom" or "")
+            status.TextColor3 = palette.Muted
+        else
+            status.Text = not config.Bosses and not config.Creeps and "Đang tắt cả hai bộ lọc" or (outside > 0 and "Chưa thấy trong bán kính" or (config.Creeps and "Chưa thấy quái" or "Chưa thấy boss"))
+            status.TextColor3 = palette.Muted
+        end
+        border.Transparency = #visible == 0 and 0.78 or 0.55
+        chart.BackgroundTransparency = #visible == 0 and 0.58 or 0.25
+    end
+    function api:Update()
+        if not alive then return end
+        local ok, err = pcall(render)
+        if not ok and os.clock() >= nextErrorWarn then
+            nextErrorWarn = os.clock() + 5
+            warn("[Nevoirs Radar]", err)
+        end
+    end
+    function api:SetEnabled(state)
+        if not alive then return end
+        States.BossRadar = state and true or false
+        if radarConn then radarConn:Disconnect(); radarConn = nil end
+        if not States.BossRadar then root.Visible = false; clearDots(); selected = nil; return end
+        lastScan = -math.huge
+        self:Update()
+        local elapsed = 0
+        radarConn = RunService.Heartbeat:Connect(function(dt)
+            elapsed += dt
+            if elapsed < 0.08 then return end
+            elapsed = 0
+            self:Update()
         end)
     end
-    local function flyVector(camera)
-        if not windowFocused or Input:GetFocusedTextBox() then return Vector3.zero end
-        local look, right = camera.CFrame.LookVector, camera.CFrame.RightVector
-        local flatL, flatR = Vector3.new(look.X, 0, look.Z), Vector3.new(right.X, 0, right.Z)
-        if flatL.Magnitude > 0 then flatL = flatL.Unit end
-        if flatR.Magnitude > 0 then flatR = flatR.Unit end
-        local move, md = Vector3.zero, humanoid.MoveDirection
-        if md.Magnitude > 0.16 and flatL.Magnitude > 0 and flatR.Magnitude > 0 then
-            -- cc's tuned mobile input: project the joystick on horizontal axes,
-            -- then reconstruct it using the camera's full 3D pitch and right axis.
-            local forward = math.clamp(md:Dot(flatL), -1, 1)
-            local strafe = math.clamp(md:Dot(flatR), -1, 1)
-            if math.abs(forward) < 0.18 then forward = 0 end
-            if math.abs(strafe) < 0.18 then strafe = 0 end
-            if forward ~= 0 or strafe ~= 0 then move = move + look * forward + right * strafe end
-        else
-            if Input:IsKeyDown(Enum.KeyCode.W) then move = move + look end
-            if Input:IsKeyDown(Enum.KeyCode.S) then move = move - look end
-            if Input:IsKeyDown(Enum.KeyCode.A) then move = move - right end
-            if Input:IsKeyDown(Enum.KeyCode.D) then move = move + right end
-        end
-        if Input:IsKeyDown(Enum.KeyCode.Space) or Input:IsKeyDown(Enum.KeyCode.E) then move = move + Vector3.new(0, 1, 0) end
-        if Input:IsKeyDown(Enum.KeyCode.LeftShift) or Input:IsKeyDown(Enum.KeyCode.Q) then move = move - Vector3.new(0, 1, 0) end
-        return move.Magnitude > 0.08 and move.Unit or Vector3.zero
+    function api:SetCombatTarget(model)
+        -- Optional read-only bridge; radar selection never sends combat commands.
+        combatTarget = model
     end
-    local function updateMovement(dt)
-        if player.Character ~= character then onCharacter(player.Character) end
-        if not character or not character.Parent then return end
-        humanoid = character:FindFirstChildOfClass("Humanoid")
-        root = character:FindFirstChild("HumanoidRootPart")
-        if not humanoid or not root or humanoid.Health <= 0 then
-            stopFly(); stopFloat(); restoreCollision(); restoreRotation()
-            return
-        end
-        if flyRecord and (flyRecord.root ~= root or flyRecord.hum ~= humanoid or not flyRecord.velocity.Parent or not flyRecord.orientation.Parent) then stopFly() end
-        if floatRecord and floatRecord.root ~= root then stopFloat() end
-        if client.Noclip then
-            for _, part in ipairs(character:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    if collisionCache[part] == nil then collisionCache[part] = part.CanCollide end
-                    part.CanCollide = false
-                end
-            end
-        elseif next(collisionCache) then restoreCollision() end
-        local camera = World.CurrentCamera
-        if client.VFly and camera then
-            suppressRotation(); beginFly()
-        else
-            stopFly()
-            local wantsFloat = forcedFloat == true or (forcedFloat ~= false and client.Float == true)
-            if wantsFloat then
-                if not floatRecord then
-                    local attachment = new("Attachment", { Name = "Slate_Float" }, root)
-                    local force = new("VectorForce", { Name = "Slate_FloatForce", Attachment0 = attachment, ApplyAtCenterOfMass = true, RelativeTo = Enum.ActuatorRelativeTo.World }, root)
-                    floatRecord = { attachment = attachment, force = force, root = root }
-                end
-                floatRecord.force.Force = Vector3.new(0, root.AssemblyMass * World.Gravity, 0)
-                local velocity = root.AssemblyLinearVelocity
-                root.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
-            else stopFloat() end
-            if client["Enable TeleportWalk"] and windowFocused and not Input:GetFocusedTextBox() and humanoid.MoveDirection.Magnitude > 0 then
-                character:TranslateBy(humanoid.MoveDirection * number(client.TPWalkSpeed, 35, 1, 200) * math.min(dt, 0.1))
-            end
-            if client.Moonwalk and camera then
-                suppressRotation()
-                local flat = Vector3.new(camera.CFrame.LookVector.X, 0, camera.CFrame.LookVector.Z)
-                if flat.Magnitude > 0.01 then root.CFrame = CFrame.lookAt(root.Position, root.Position - flat.Unit) end
-            else restoreRotation() end
-        end
-    end
-    local function restoreAtmospheres()
-        for atmosphere, values in pairs(atmosphereCache) do
-            if atmosphere.Parent then
-                atmosphere.Density = values.Density
-                atmosphere.Haze = values.Haze
-            end
-            atmosphereCache[atmosphere] = nil
-        end
-    end
-    local function restoreLighting()
-        if not lightingRecord then return end
-        lightApplying = true
-        for property, value in pairs(lightingRecord) do Lighting[property] = value end
-        lightApplying, lightingRecord = false, nil
-        table.clear(lightDesired)
-        restoreAtmospheres()
-    end
-    local function updateLighting()
-        local fullbright, noFog = client["Full Bright"] == true, false
-        for _, effects in pairs(environmentOwners) do
-            fullbright = fullbright or effects.FullBright == true or effects.Fullbright == true
-            noFog = noFog or effects.NoFog == true
-        end
-        local desired = {}
-        if fullbright then for property, value in pairs(brightness) do desired[property] = value end end
-        if noFog then desired.FogStart = 0; desired.FogEnd = 1000000 end
-        if not next(desired) then restoreLighting(); restoreAtmospheres(); return end
-        lightingRecord = lightingRecord or {}
-        lightApplying = true
-        for property, value in pairs(lightingRecord) do
-            if desired[property] == nil then Lighting[property] = value; lightingRecord[property] = nil end
-        end
-        for property, value in pairs(desired) do
-            if lightingRecord[property] == nil then lightingRecord[property] = Lighting[property] end
-            if Lighting[property] ~= value then Lighting[property] = value end
-        end
-        lightDesired, lightApplying = desired, false
-        if noFog then
-            for _, object in ipairs(Lighting:GetChildren()) do
-                if object:IsA("Atmosphere") then
-                    if not atmosphereCache[object] then atmosphereCache[object] = { Density = object.Density, Haze = object.Haze } end
-                    object.Density, object.Haze = 0, 0
-                end
-            end
-        else restoreAtmospheres() end
-    end
-    local lightingProperties = {}
-    for property in pairs(brightness) do lightingProperties[#lightingProperties + 1] = property end
-    lightingProperties[#lightingProperties + 1] = "FogStart"
-    for _, property in ipairs(lightingProperties) do
-        connect(Lighting:GetPropertyChangedSignal(property), function()
-            if live and lightingRecord and lightingRecord[property] ~= nil and not lightApplying and Lighting[property] ~= lightDesired[property] then lightingRecord[property] = Lighting[property] end
-        end)
-    end
-    local function recordPrompt(prompt)
-        if not live or not client.InstantPrompt or not prompt:IsA("ProximityPrompt") then return end
-        if promptCache[prompt] == nil then promptCache[prompt] = prompt.HoldDuration end
-        prompt.HoldDuration = 0
-    end
-    local function restorePrompts()
-        for prompt, duration in pairs(promptCache) do
-            if prompt.Parent then prompt.HoldDuration = duration end
-            promptCache[prompt] = nil
-        end
-    end
-    local function updatePrompts()
-        if client.InstantPrompt and not instantWas then
-            instantWas = true
-            for _, object in ipairs(World:GetDescendants()) do if object:IsA("ProximityPrompt") then recordPrompt(object) end end
-        elseif not client.InstantPrompt and instantWas then instantWas = false; restorePrompts() end
-    end
-    connect(Prompts.PromptShown, recordPrompt)
-    connect(World.DescendantAdded, function(object) if object:IsA("ProximityPrompt") then recordPrompt(object) end end)
-
-    local flyControl
-    connect(Input.InputBegan, function(input, processed)
-        if processed or Input:GetFocusedTextBox() or not live then return end
-        if input.KeyCode == Enum.KeyCode.V and client.FlyKeyEnabled then
-            client.VFly = not client.VFly
-            if flyControl and flyControl.SetValue then flyControl:SetValue(client.VFly) end
-            save()
-            notify("VFly", client.VFly and "Flight enabled · xoay camera + cần di chuyển" or "Flight disabled")
-        end
-    end)
-    connect(Input.WindowFocusReleased, function()
-        windowFocused = false
-        if flyRecord then flyRecord.velocity.Velocity = Vector3.zero end
-    end)
-    connect(Input.WindowFocused, function() windowFocused = true end)
-    connect(player.CharacterAdded, onCharacter)
-    onCharacter(player.Character)
-    -- cc updates flight in RenderStepped so camera rotation affects this frame.
-    connect(Run.RenderStepped, function()
-        if not live or ctx.Alive == false or not client.VFly or not flyRecord then return end
-        local camera = World.CurrentCamera
-        local record = flyRecord
-        if not camera or not record.velocity.Parent or not record.orientation.Parent or not record.root.Parent then return end
-        local move = flyVector(camera)
-        if move.Magnitude > 0 then
-            record.velocity.Velocity = move * number(client.VFlySpeed, 60, 5, 250)
-            local look = camera.CFrame.LookVector
-            if look.Magnitude > 0 then record.orientation.CFrame = CFrame.new(record.root.Position, record.root.Position + look) end
-        else
-            record.velocity.Velocity = Vector3.zero
-            record.orientation.CFrame = record.root.CFrame
-        end
-    end)
-    local espTime, environmentTime = 0, 0
-    connect(Run.Heartbeat, function(dt)
-        if not live or ctx.Alive == false then return end
-        updateMovement(dt)
-        espTime, environmentTime = espTime + dt, environmentTime + dt
-        if espTime >= 0.1 then espTime = 0; updateESP() end
-        if environmentTime >= 0.15 then environmentTime = 0; updateLighting(); updatePrompts() end
-    end)
-    local ClientPackage = {}
-    function ClientPackage.UpdatePosition(float, force)
-        if float ~= nil then client.Float = float == true end
-        if force == true then forcedFloat = true
-        elseif force == false then forcedFloat = false
-        else forcedFloat = "None" end
-    end
-    function ClientPackage.Noclip(value) if value ~= nil then client.Noclip = value == true end end
-    function ClientPackage.Brightness(value) if value ~= nil then client["Full Bright"] = value == true end end
-    function ClientPackage.SetJumpPower() end
-    function ClientPackage.SetWalkSpeed() end
-    function ClientPackage.RunWalkSpeed() end
-    function ClientPackage.WalkSpeedC() end
-    local built = false
-    local function buildTabs(window)
-        if built or not window then return end
-        built = true
-        local visuals = window:Tab({ Title = "Visuals", Icon = "scan-eye" })
-        visuals:Section({ Title = "Slate ESP", Desc = "One-line labels, soft outlines, semantic colors. Chapter target switches stay in each chapter tab." })
-        local playerToggles = {}
-        local function toggle(tab, title, desc, storage, key, onChange)
-            local control = tab:Toggle({ Title = title, Desc = desc, Value = storage[key] == true, Callback = function(value)
-                if not live then return end
-                storage[key] = value == true
-                if onChange then onChange(value == true) end
-                save()
-            end })
-            if storage == client then playerToggles[key] = control end
-            return control
-        end
-        toggle(visuals, "Enable overlays", "Master visibility for every Slate ESP category.", settings, "Enabled")
-        toggle(visuals, "Players", "Mint · account identity and distance; excludes you.", settings, "Players", scanPlayers)
-        toggle(visuals, "Threats", "Coral · monsters and bosses registered by chapter controls.", settings, "Threats")
-        toggle(visuals, "Objectives", "Blue · tasks and items. Amber/green retain their original progress meaning.", settings, "Objectives")
-        toggle(visuals, "Yen", "Amber · currency targets registered by the Yen controls.", settings, "Currency")
-        visuals:Section({ Title = "Presentation", Desc = "Nearest targets win the display budget; streaming targets are released automatically." })
-        toggle(visuals, "Compact labels", "Name · distance in studs, with a category symbol.", settings, "Labels")
-        toggle(visuals, "Soft outlines", "Up to 28 nearby silhouettes, with 94% transparent fill.", settings, "Outlines")
-        toggle(visuals, "Reduce label overlap", "Suppress overlapping labels while keeping nearer targets.", settings, "AvoidOverlap")
-        visuals:Slider({ Title = "Maximum distance", Desc = "Studs from your character, or camera while no character exists.", Step = 50,
-            Value = { Min = 100, Max = 6000, Default = settings.Distance }, Callback = function(value) settings.Distance = number(value, 1800, 100, 6000); save() end })
-        visuals:Slider({ Title = "Label budget", Desc = "Lower budgets keep crowded scenes quieter.", Step = 1,
-            Value = { Min = 10, Max = 80, Default = settings.LabelBudget }, Callback = function(value) settings.LabelBudget = number(value, 60, 10, 80); save() end })
-        local tab = window:Tab({ Title = "Local Player", Icon = "person-standing" })
-        tab:Section({ Title = "Movement", Desc = "VFly temporarily pauses TPWalk and Moonwalk, then resumes your selected modes." })
-        flyControl = toggle(tab, "VFly", "Mobile: xoay camera + cần di chuyển. PC: WASD · Space/E lên · Shift/Q xuống.", client, "VFly", function(value) if not value then stopFly() end end)
-        tab:Slider({ Title = "Flight speed", Desc = "Studs per second; diagonal movement is normalized.", Step = 1,
-            Value = { Min = 5, Max = 250, Default = client.VFlySpeed }, Callback = function(value) client.VFlySpeed = number(value, 60, 5, 250); save() end })
-        toggle(tab, "V shortcut", "Press V to switch flight while no text field is focused.", client, "FlyKeyEnabled")
-        toggle(tab, "TPWalk", "Adds displacement in your movement direction; does not change Humanoid WalkSpeed.", client, "Enable TeleportWalk")
-        tab:Slider({ Title = "TPWalk boost", Desc = "Additional studs per second above the game's normal movement.", Step = 1,
-            Value = { Min = 1, Max = 200, Default = client.TPWalkSpeed }, Callback = function(value) client.TPWalkSpeed = number(value, 35, 1, 200); save() end })
-        toggle(tab, "Noclip", "Temporarily disables character collisions and restores each original value when disabled.", client, "Noclip", function(value) if not value then restoreCollision() end end)
-        toggle(tab, "Moonwalk", "Faces away from the camera. This changes facing direction, not animations.", client, "Moonwalk", function(value) if not value and not client.VFly then restoreRotation() end end)
-        tab:Section({ Title = "Environment & interaction", Desc = "Restores lighting, prompt holds, collisions and character state on unload." })
-        toggle(tab, "Fullbright", "Clear daytime lighting; the latest game lighting values are restored when disabled.", client, "Full Bright", updateLighting)
-        toggle(tab, "Instant E", "Removes local proximity-prompt hold time. Server checks and distance restrictions still apply.", client, "InstantPrompt", updatePrompts)
-        tab:Button({ Title = "Reset local controls", Desc = "Stops movement modes and restores all temporary local changes.", Callback = function()
-            client.VFly, client.Noclip, client.Moonwalk, client["Enable TeleportWalk"] = false, false, false, false
-            client["Full Bright"], client.InstantPrompt, client.Float = false, false, false
-            forcedFloat = "None"
-            stopFly(); stopFloat(); restoreCollision(); restoreRotation(); restoreLighting(); restorePrompts()
-            instantWas = false
-            for key, control in pairs(playerToggles) do if control.SetValue then control:SetValue(client[key] == true, true) end end
-            save(); notify("Local Player", "Temporary local changes restored.")
-        end })
-    end
-    local function destroy()
-        if not live then return end
-        live = false
+    function api:Destroy()
+        if not alive then return end
+        alive = false
+        if radarConn then radarConn:Disconnect(); radarConn = nil end
         for _, connection in ipairs(connections) do connection:Disconnect() end
         table.clear(connections)
-        stopFly(); stopFloat(); restoreCollision(); restoreRotation(); restoreLighting(); restorePrompts()
-        for entry in pairs(registry) do entry.handle.Destroy() end
-        overlay:Destroy()
+        records, selected, combatTarget = {}, nil, nil
     end
-    local api = { ESPF = ESPF, ClientPackage = ClientPackage, BuildTabs = buildTabs, OnCharacter = onCharacter, Destroy = destroy, Palette = palette }
-    function api.SetEnvironment(first, second, third)
-        local owner, effects = first, second
-        if first == api then owner, effects = second, third end
-        if not live or owner == nil then return end
-        if type(effects) == "table" then environmentOwners[owner] = effects else environmentOwners[owner] = nil end
-        updateLighting()
+    table.insert(connections, zoomIn.Activated:Connect(function() setRadius(BossRadarRange / 1.5); api:Update() end))
+    table.insert(connections, zoomOut.Activated:Connect(function() setRadius(BossRadarRange * 1.5); api:Update() end))
+    table.insert(connections, header.InputBegan:Connect(function(input)
+        if not config.Move or (input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+        dragging, dragInput = true, input
+        dragPointer, dragOrigin = Vector2.new(input.Position.X, input.Position.Y), root.AbsolutePosition
+    end))
+    table.insert(connections, UserInputService.InputChanged:Connect(function(input)
+        if not dragging or not config.Move or not States.BossRadar then return end
+        if input ~= dragInput and input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+        local delta = Vector2.new(input.Position.X, input.Position.Y) - dragPointer
+        local view, minX, minY, maxX, maxY = safeBounds()
+        config.X = math.clamp(dragOrigin.X + delta.X, minX, maxX) / math.max(view.X, 1)
+        config.Y = math.clamp(dragOrigin.Y + delta.Y, minY, maxY) / math.max(view.Y, 1)
+        layout()
+    end))
+    table.insert(connections, UserInputService.InputEnded:Connect(function(input)
+        if not dragging or (input ~= dragInput and input.UserInputType ~= Enum.UserInputType.MouseButton1) then return end
+        dragging, dragInput = false, nil
+        setSetting("RadarPositionX", config.X)
+        setSetting("RadarPositionY", config.Y)
+    end))
+    table.insert(connections, RadarGui.Destroying:Connect(function() api:Destroy() end))
+    function api:BuildControls(tab)
+        local controls, expanded = {}, false
+        local function remember(control)
+            if control then table.insert(controls, control); setElementVisible(control, expanded) end
+            return control
+        end
+        addButton(tab, "Thiết lập Radar", "Mở/thu gọn thiết lập con.", function()
+            expanded = not expanded
+            for _, control in ipairs(controls) do setElementVisible(control, expanded) end
+        end)
+        local function toggle(title, key, setting)
+            remember(addToggle(tab, title, "", config[key], function(value)
+                config[key] = value; setSetting(setting, value); lastScan = -math.huge; api:Update()
+            end))
+        end
+        toggle("Radar · Theo camera", "CameraUp", "RadarCameraUp")
+        toggle("Radar · Boss", "Bosses", "RadarBosses")
+        toggle("Radar · Creep", "Creeps", "RadarCreeps")
+        toggle("Radar · Tên mục tiêu", "Names", "RadarNames")
+        toggle("Radar · Chênh độ cao", "Height", "RadarHeight")
+        toggle("Radar · Dấu Nearby Kill", "CombatMarker", "RadarCombatMarker")
+        remember(addNumberInput(tab, "Radar · Kích thước", "Đường kính pixel.", config.Size, 150, 280, function(value)
+            config.Size = value; api:Update()
+        end, 5, "RadarSize"))
+        remember(addNumberInput(tab, "Radar · Độ đậm", "0.35–1.", config.Opacity, 0.35, 1, function(value)
+            config.Opacity = value; api:Update()
+        end, 0.05, "RadarOpacity"))
+        remember(addToggle(tab, "Radar · Chỉnh vị trí", "Chỉ kéo thanh tiêu đề khi bật.", false, function(value)
+            config.Move = value; dragging = false; api:Update()
+        end))
+        remember(addButton(tab, "Radar · Đặt lại vị trí", "", function()
+            config.X, config.Y = 0.76, 0.10
+            setSetting("RadarPositionX", config.X); setSetting("RadarPositionY", config.Y); api:Update()
+        end))
     end
-    if ctx.addCleanup then ctx.addCleanup(destroy) end
     return api
+end)()
+
+local function updateBossRadar()
+    Radar3D:Update()
 end
 
+local function setBossRadar(state)
+    Radar3D:SetEnabled(state)
 end
 
-Modules.Book3Extensions = function()
--- Slate Book 3 extensions. New Egao source takes precedence over 229's event finder.
--- No action starts on load; only an explicit control or a valid queued Egao session starts it.
-return function(ctx)
-    local S = ctx.Services
-    local Player, Workspace, ReplicatedStorage = ctx.Player, S.Workspace, S.ReplicatedStorage
-    local RunService, TeleportService, TweenService = S.RunService, S.TeleportService, S.TweenService
-    local LOBBY, FOREST = 6243699076, 128715637193371
-    local CHECKPOINT = CFrame.new(-3658, 8, 372)
-    local alive, built, connections = true, false, {}
-    local api = {}
-    local egaoCard, nearbyCard, floatingCard, egaoToggle, nearbyToggle
-    local egaoGeneration, nearbyGeneration = 0, 0
-    local activeTween
-    local owner = {}
-    local bindName = "SlateEgaoLook_" .. tostring(math.random(100000, 999999))
-    local weak = { __mode = "k" }
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ESP CORE
+-- ══════════════════════════════════════════════════════════════════════════════
+local espPool  = { Player = {}, Monster = {}, Task = {}, Yen = {} }
+local pollConns = { Player = nil, Monster = nil, Task = nil, Yen = nil }
 
-    ctx.Config.Egao = type(ctx.Config.Egao) == "table" and ctx.Config.Egao or {}
-    ctx.Config.NearbyKill = type(ctx.Config.NearbyKill) == "table" and ctx.Config.NearbyKill or {}
-    local options, nkOptions = ctx.Config.Egao, ctx.Config.NearbyKill
-    for _, key in ipairs({ "AutoLook", "FullBright", "NoFog", "Floating" }) do
-        if options[key] == nil then options[key] = true end
+local function destroyEntry(e)
+    if not e then return end
+    pcall(function() if e.distConn then e.distConn:Disconnect() end end)
+    pcall(function() if e.hl and e.hl.Parent then e.hl:Destroy() end end)
+    pcall(function() if e.bb and e.bb.Parent then e.bb:Destroy() end end)
+end
+
+local function clearPool(cat)
+    for k, e in pairs(espPool[cat]) do
+        destroyEntry(e)
+        espPool[cat][k] = nil
     end
-    local queued = type(ctx.QueueInfo) == "table" and ctx.QueueInfo or {}
-    if queued.Egao == true and type(queued.EgaoOptions) == "table" then
-        for _, key in ipairs({ "AutoLook", "FullBright", "NoFog", "Floating" }) do
-            if type(queued.EgaoOptions[key]) == "boolean" then options[key] = queued.EgaoOptions[key] end
+end
+
+local function stopPoll(cat)
+    if pollConns[cat] then
+        pollConns[cat]:Disconnect()
+        pollConns[cat] = nil
+    end
+end
+
+local function createESPEntry(cat, key, adornee, anchor, label, color)
+    if not validAdornee(adornee) or not validPart(anchor) then return end
+    if espPool[cat][key] then return end
+
+    local ok1, hl = pcall(function()
+        local h = Instance.new("Highlight")
+        h.Name = "MIIY_HL"
+        h.Adornee = adornee
+        h.FillColor = color
+        h.OutlineColor = Color3.new(1,1,1)
+        h.FillTransparency = 0.5
+        h.OutlineTransparency = 0
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.Parent = adornee
+        return h
+    end)
+    if not ok1 or not hl or not hl.Parent then return end
+
+    local ok2, bb = pcall(function()
+        local b = Instance.new("BillboardGui")
+        b.Name = "MIIY_BB"
+        b.Adornee = anchor
+        b.Size = UDim2.new(0, 160, 0, 36)
+        b.StudsOffset = Vector3.new(0, 2.8, 0)
+        b.AlwaysOnTop = true
+        b.Parent = anchor
+        return b
+    end)
+    if not ok2 or not bb or not bb.Parent then
+        pcall(function() hl:Destroy() end)
+        return
+    end
+
+    local nameLbl = Instance.new("TextLabel")
+    nameLbl.Size = UDim2.new(1,0,0.55,0)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Text = label
+    nameLbl.TextColor3 = color
+    nameLbl.TextStrokeTransparency = 0.1
+    nameLbl.Font = Enum.Font.GothamBold
+    nameLbl.TextSize = 11
+    nameLbl.Parent = bb
+
+    local distLbl = Instance.new("TextLabel")
+    distLbl.Size = UDim2.new(1,0,0.45,0)
+    distLbl.Position = UDim2.new(0,0,0.55,0)
+    distLbl.BackgroundTransparency = 1
+    distLbl.TextColor3 = C_DIM
+    distLbl.Font = Enum.Font.Gotham
+    distLbl.TextSize = 9
+    distLbl.Parent = bb
+
+    local distConn = RunService.Heartbeat:Connect(function()
+        if not bb.Parent or not anchor.Parent then return end
+        local mc  = getChar()
+        local mrp = getHRP(mc)
+        if mrp then
+            distLbl.Text = string.format("%.0f st", (mrp.Position - anchor.Position).Magnitude)
         end
-    end
-    local nkDefaults = { FireDelay = 0.03, CreepRange = 70, HogoRange = 25, FleshRange = 20, SpiderRange = 20 }
-    for key, value in pairs(nkDefaults) do
-        nkOptions[key] = tonumber(nkOptions[key]) or value
-    end
-    nkOptions.Filters = type(nkOptions.Filters) == "table" and nkOptions.Filters or {}
-    for _, key in ipairs({ "Gata", "Grunt", "Muki", "Hogo", "FleshBlock", "Spider" }) do
-        if nkOptions.Filters[key] == nil then nkOptions.Filters[key] = true end
-    end
+    end)
 
-    local E = {
-        Running = false, Found = false, Phase = "idle", State = "idle", Detail = "Bật tìm kiếm để bắt đầu từ Lobby hoặc Forest.",
-        Hops = math.max(0, tonumber(queued.Hops) or 0), StartedAt = tonumber(queued.StartedAt),
-        Session = type(queued.EgaoSession) == "string" and queued.EgaoSession or nil,
-        Queued = false, PendingTeleport = false, PendingSave = false, Retry = 0,
-        LookActive = false, LookReason = "idle", Target = "—", TargetDistance = nil,
-        Pulse = false, PulseExists = false, LastReason = queued.EgaoReason or "Chưa chạy",
+    espPool[cat][key] = {
+        hl = hl,
+        bb = bb,
+        distConn = distConn,
+        adornee = adornee,
+        anchor = anchor,
+        label = label,
+        color = color,
     }
-    local NK = { Running = false, Target = nil, Detail = "Chỉ xử lý mục tiêu trong tầm; không tự dịch chuyển.", State = "idle", Sent = 0, Hook = false }
-    local lookPart, lookRig, lookLabel, lookStarted = nil, nil, nil, 0
-    local pendingRig
-    local rigs = setmetatable({}, weak)
-    local lastRigScan, lastLookUi = 0, 0
-    local hookStore
-    local lastCardRefresh = 0
+end
 
-    local function valid()
-        return alive and ctx.Alive ~= false
-    end
-    local function on(signal, callback)
-        local connection = signal:Connect(callback)
-        table.insert(connections, connection)
-        return connection
-    end
-    local function save()
-        if ctx.Save then pcall(ctx.Save) end
-    end
-    local function notify(title, text)
-        if ctx.Notify then pcall(ctx.Notify, title, text) end
-    end
-    local function root()
-        return Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-    end
-    local function partAlive(part)
-        return part and part.Parent and part:IsA("BasePart") and part:IsDescendantOf(Workspace)
-    end
-    local function path(names)
-        local object = Workspace
-        for _, name in ipairs(names) do
-            object = object and object:FindFirstChild(name)
+local function prunePool(cat)
+    for k, e in pairs(espPool[cat]) do
+        local ok = true
+        if not e or not e.hl or not e.bb then
+            ok = false
         end
-        return object
-    end
-    local function ping()
-        local ok, value = pcall(function() return S.Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
-        return ok and math.max(0, tonumber(value) or 0) or 0
-    end
-    local function duration(seconds)
-        seconds = math.max(0, math.floor(seconds))
-        return string.format("%02d:%02d:%02d", math.floor(seconds / 3600), math.floor(seconds / 60) % 60, seconds % 60)
-    end
-    local function update(handle, data)
-        if handle and handle.Update then pcall(function() handle:Update(data) end) end
-    end
-    local function showFloat(value)
-        if not floatingCard then return end
-        if floatingCard.SetVisible then
-            pcall(function() floatingCard:SetVisible(value) end)
-        elseif floatingCard.Set then
-            pcall(function() floatingCard:Set(value) end)
-        end
-    end
-    local function refresh(force)
-        if not force and os.clock() - lastCardRefresh < 0.25 then return end
-        lastCardRefresh = os.clock()
-        local elapsed = E.StartedAt and (E.FinishedAt or os.time()) - E.StartedAt or 0
-        local phaseNames = {
-            idle = "Sẵn sàng", loading = "Đang tải", lobby = "Load Save 1", intro = "Chờ intro",
-            map = "Chờ Forest", checkpoint = "Tới điểm kiểm tra", pulse = "Tìm Egao", returning = "Về Lobby",
-            found = "Egao xuất hiện", paused = "Đã tạm dừng", stopped = "Đã dừng",
-        }
-        local lookText = not options.AutoLook and "Tắt" or (E.LookActive and "Đang theo dõi" or E.LookReason)
-        local fields = {
-            Phase = phaseNames[E.Phase] or E.Phase,
-            Hops = tostring(E.Hops), Time = duration(elapsed), Ping = tostring(math.floor(ping() + 0.5)) .. " ms",
-            Pulse = E.Pulse and "Hiện" or (E.PulseExists and "Ẩn" or "Chưa có UI"),
-            Look = lookText, Target = E.Target .. (E.TargetDistance and (" · " .. E.TargetDistance .. " st") or ""),
-            Queue = E.Queued and "Đã lưu phiên tiếp theo" or "Chưa xếp hàng", Reason = E.LastReason,
-        }
-        update(egaoCard, { Title = "EGAO / FOREST", Subtitle = E.Detail, State = E.State, Fields = fields })
-        update(floatingCard, {
-            Title = "EGAO · " .. (phaseNames[E.Phase] or E.Phase), Subtitle = E.Detail, State = E.State,
-            Fields = { Hops = tostring(E.Hops), Time = duration(elapsed), Look = lookText, Target = fields.Target },
-        })
-        showFloat(E.Running and options.Floating == true)
-        local target = NK.Target
-        update(nearbyCard, {
-            Title = "NEARBY / TARGET", Subtitle = NK.Detail, State = NK.State,
-            Fields = {
-                Target = target and target.instance.Name or "—",
-                Kind = target and target.kind or "—", Range = target and (tostring(math.floor(target.dist)) .. " st") or "—",
-                Packet = NK.Hook and "Camera replica sẵn sàng" or "Chưa hook · camera giữ nguyên",
-                Sent = tostring(NK.Sent), Confirm = "Chưa có xác nhận hạ mục tiêu từ server",
-            },
-        })
-    end
-    local function setEgao(phase, detail, state, reason)
-        E.Phase, E.Detail, E.State = phase, detail, state or "active"
-        if reason then E.LastReason = reason end
-        refresh(true)
-    end
-    local function running(generation)
-        return valid() and E.Running and generation == egaoGeneration
-    end
-    local function sleep(seconds, generation)
-        local finish = os.clock() + seconds
-        repeat
-            if not running(generation) then return false end
-            task.wait(math.min(0.10, math.max(0.01, finish - os.clock())))
-        until os.clock() >= finish
-        return running(generation)
-    end
-    local function waitUntil(predicate, seconds, generation, interval)
-        local finish = os.clock() + seconds
-        repeat
-            if not running(generation) then return nil end
-            local value = predicate()
-            if value then return value end
-            if not sleep(interval or 0.15, generation) then return nil end
-        until os.clock() >= finish
-        return nil
-    end
-    local function environment()
-        if ctx.Visuals and ctx.Visuals.SetEnvironment then
-            ctx.Visuals:SetEnvironment("Egao", {
-                FullBright = E.Running and options.FullBright == true,
-                NoFog = E.Running and options.NoFog == true,
-            })
-        end
-    end
-    local function clearEnvironment()
-        if ctx.Visuals and ctx.Visuals.ClearEnvironment then
-            ctx.Visuals:ClearEnvironment("Egao")
-        elseif ctx.Visuals and ctx.Visuals.SetEnvironment then
-            ctx.Visuals:SetEnvironment("Egao", nil)
-        end
-    end
-    local function stopLook(reason)
-        E.LookActive, E.LookReason = false, reason or "Đã nhả camera"
-        E.Target, E.TargetDistance = "—", nil
-        lookPart, lookRig, lookLabel, pendingRig = nil, nil, nil, nil
-        pcall(function() RunService:UnbindFromRenderStep(bindName) end)
-    end
-
-    local FACE_PRIORITY = { "sw face", "r eye", "l eye", "teeth", "gums", "head", "face", "RootPart" }
-    local function registerRig(rig, newSpawn)
-        if rig and rig:IsA("Model") and rig.Name == "EgaoEventRig" and not rigs[rig] then
-            rigs[rig] = os.clock()
-            if newSpawn and E.LookActive and rig ~= lookRig then
-                pendingRig = rig
-                lookPart, lookRig, lookLabel = nil, nil, nil
-                E.Target, E.TargetDistance = "Phase mới · ổn định 1 giây", nil
+        if ok then
+            if not validAdornee(e.adornee) or not validPart(e.anchor) then
+                ok = false
             end
         end
-    end
-    local function targetInRig(rig)
-        for _, name in ipairs(FACE_PRIORITY) do
-            local part = rig:FindFirstChild(name, true)
-            if partAlive(part) then return part, name end
+        if not ok then
+            destroyEntry(e)
+            espPool[cat][k] = nil
         end
     end
-    local function acquireLook()
-        local now = os.clock()
-        if now - lastRigScan < 0.08 then return end
-        lastRigScan = now
-        for _, child in ipairs(Workspace:GetChildren()) do registerRig(child) end
-        local bestPart, bestRig, bestLabel, bestDistance
-        local preferPending = false
-        local hrp = root()
-        if pendingRig and pendingRig.Parent and rigs[pendingRig] then
-            if now - rigs[pendingRig] < 1 then return end
-            local part, label = targetInRig(pendingRig)
-            if part then
-                bestPart, bestRig, bestLabel = part, pendingRig, label
-                bestDistance = hrp and (hrp.Position - part.Position).Magnitude or 0
-                preferPending = true
-            elseif now - rigs[pendingRig] < 3.2 then
-                return
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ESP PLAYER
+-- ══════════════════════════════════════════════════════════════════════════════
+local playerCharConns = {}
+
+local function scanPlayers()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local char = plr.Character
+        if not char then continue end
+        local head = char:FindFirstChild("Head")
+        if not head then continue end
+
+        local key = "Player_" .. tostring(plr.UserId)
+        if espPool.Player[key] and espPool.Player[key].adornee ~= char then
+            destroyEntry(espPool.Player[key])
+            espPool.Player[key] = nil
+        end
+
+        createESPEntry("Player", key, char, head, plr.Name, Color3.fromRGB(0,255,200))
+    end
+end
+
+local function setPlayerESP(state)
+    States.ESPPlayer = state
+    stopPoll("Player")
+    for _, c in ipairs(playerCharConns) do pcall(function() c:Disconnect() end) end
+    table.clear(playerCharConns)
+    clearPool("Player")
+    if not state then return end
+
+    scanPlayers()
+
+    local function hookPlayer(plr)
+        if plr == LocalPlayer then return end
+        local c = plr.CharacterAdded:Connect(function()
+            task.wait(0.3)
+            if States.ESPPlayer then
+                local key = "Player_" .. tostring(plr.UserId)
+                destroyEntry(espPool.Player[key])
+                espPool.Player[key] = nil
+                scanPlayers()
             end
-            pendingRig = nil
+        end)
+        table.insert(playerCharConns, c)
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        hookPlayer(plr)
+    end
+
+    table.insert(playerCharConns, Players.PlayerAdded:Connect(function(plr)
+        hookPlayer(plr)
+        task.wait(0.5)
+        if States.ESPPlayer then scanPlayers() end
+    end))
+
+    table.insert(playerCharConns, Players.PlayerRemoving:Connect(function(plr)
+        local key = "Player_" .. tostring(plr.UserId)
+        destroyEntry(espPool.Player[key])
+        espPool.Player[key] = nil
+    end))
+
+    local t = 0
+    pollConns.Player = RunService.Heartbeat:Connect(function(dt)
+        t = t + dt
+        if t >= 1 then
+            t = 0
+            prunePool("Player")
+            if States.ESPPlayer then scanPlayers() end
         end
-        for rig, firstSeen in pairs(rigs) do
-            if not rig.Parent or not rig:IsDescendantOf(Workspace) then
-                rigs[rig] = nil
-            elseif now - firstSeen >= 1 then
-                local part, label = targetInRig(rig)
-                if part then
-                    local distance = hrp and (hrp.Position - part.Position).Magnitude or 0
-                    if not bestPart or (not preferPending and distance < bestDistance) then
-                        bestPart, bestRig, bestLabel, bestDistance = part, rig, label, distance
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ESP MONSTER
+-- ══════════════════════════════════════════════════════════════════════════════
+local C_MON = Color3.fromRGB(220, 60, 60)
+
+local function scanMonsters()
+    local function addCreep(model)
+        if not model or not model.Parent then return end
+        local hitbox = model:FindFirstChild("Hitbox") or rootOf(model)
+        if not hitbox or not validPart(hitbox) then return end
+        local key = makeUniqueKey("Monster_Creep", model)
+        if espPool.Monster[key] and espPool.Monster[key].adornee ~= model then
+            destroyEntry(espPool.Monster[key])
+            espPool.Monster[key] = nil
+        end
+        createESPEntry("Monster", key, model, hitbox, "Creep", C_MON)
+    end
+
+    if MonsterAllows.Gata then
+        -- Gata gốc: Section1.Grunts, model có Humanoid.
+        local grunts = safeFolder({"Section1","Grunts"})
+        if grunts then
+            for _, v in ipairs(grunts:GetChildren()) do
+                if v:IsA("Model") and v:FindFirstChildOfClass("Humanoid") then
+                    addCreep(v)
+                end
+            end
+        end
+
+        -- Grunts mở rộng: ví dụ Section2.Grunts.Grunt1 và các thư mục Grunts khác trong Section.
+        local seenGrunts = {}
+        local function addGruntFolder(folder)
+            if not folder then return end
+            for _, obj in ipairs(folder:GetDescendants()) do
+                if obj:IsA("Model") and not seenGrunts[obj] then
+                    local n = tostring(obj.Name or ""):lower()
+                    if n:find("grunt", 1, true) and (obj:FindFirstChildOfClass("Humanoid") or rootOf(obj)) then
+                        seenGrunts[obj] = true
+                        addCreep(obj)
                     end
                 end
             end
         end
-        lookPart, lookRig, lookLabel = bestPart, bestRig, bestLabel
-        E.Target = bestLabel or "Chờ rig / ổn định 1 giây"
-        E.TargetDistance = bestDistance and tostring(math.floor(bestDistance)) or nil
-    end
-    local function startLook(reason)
-        if not E.Running then return end
-        E.Found = true
-        setEgao("found", options.AutoLook and "Đã thấy tín hiệu Egao; theo dõi rig tối đa 62 giây mỗi đợt." or "Đã thấy Egao. Auto Look đang tắt.", "success", reason)
-        if not options.AutoLook or E.LookActive then return end
-        E.LookActive, E.LookReason, lookStarted = true, "Đang chờ rig", os.clock()
-        lookPart, lookRig, lookLabel = nil, nil, nil
-        acquireLook()
-        RunService:BindToRenderStep(bindName, Enum.RenderPriority.Camera.Value + 1, function()
-            if not valid() or not E.Running or not E.LookActive or not options.AutoLook then return stopLook("Đã tắt") end
-            if os.clock() - lookStarted > 62 then
-                stopLook("Đã theo dõi đủ 62 giây")
-                return refresh(true)
-            end
-            if not partAlive(lookPart) or not lookRig or not lookRig.Parent then acquireLook() end
-            local camera = Workspace.CurrentCamera
-            if camera and partAlive(lookPart) then
-                local position = lookPart.Position + (lookLabel == "RootPart" and Vector3.new(0, 3.35, 0) or Vector3.zero)
-                if (position - camera.CFrame.Position).Magnitude >= 1 then camera.CFrame = CFrame.lookAt(camera.CFrame.Position, position) end
-                if os.clock() - lastLookUi >= 0.12 then
-                    lastLookUi = os.clock()
-                    local hrp = root()
-                    E.Target, E.TargetDistance = lookLabel or lookPart.Name, hrp and tostring(math.floor((hrp.Position - lookPart.Position).Magnitude)) or nil
-                    E.LookReason = "Tracking · " .. tostring(math.floor(os.clock() - lookStarted)) .. "s"
-                end
-            end
-        end)
-    end
-    local function queueInfo(enabled, reason)
-        return {
-            Egao = enabled, EgaoSession = E.Session, Hops = E.Hops, StartedAt = E.StartedAt,
-            EgaoReason = reason or E.LastReason, EgaoQueuedAt = os.time(),
-            EgaoOptions = { AutoLook = options.AutoLook, FullBright = options.FullBright, NoFog = options.NoFog, Floating = options.Floating },
-        }
-    end
-    local function queueSelf(reason)
-        if type(ctx.QueueSelf) ~= "function" then return false end
-        local ok, result = pcall(ctx.QueueSelf, queueInfo(true, reason))
-        if ok and result == true then E.Queued = true; return true end
-        return false
-    end
-    local function syncToggle(value)
-        if egaoToggle and egaoToggle.Set then pcall(function() egaoToggle:Set(value, true) end) end
-    end
-    local function stopEgao(reason, paused)
-        if not E.Running and not E.Queued then return end
-        E.Running, E.PendingTeleport, E.PendingSave = false, false, false
-        E.FinishedAt = os.time()
-        egaoGeneration = egaoGeneration + 1
-        if activeTween then pcall(function() activeTween:Cancel() end); activeTween = nil end
-        stopLook(reason or "Dừng thủ công")
-        clearEnvironment()
-        if E.Queued and type(ctx.QueueSelf) == "function" then
-            local ok, cancelled = pcall(ctx.QueueSelf, queueInfo(false, reason or "manual stop"))
-            if not ok or cancelled ~= true then
-                notify("Egao / hàng chờ", "Không cập nhật được hàng chờ hủy. Nếu đã bắt đầu teleport, chạy lại loader và tắt Egao ở màn tiếp theo.")
+        addGruntFolder(safeFolder({"Section2","Grunts"}))
+        addGruntFolder(safeFolder({"Section3","Grunts"}))
+        addGruntFolder(safeFolder({"Section4","Grunts"}))
+        addGruntFolder(safeFolder({"Section5","Grunts"}))
+        for _, obj in ipairs(Workspace:GetChildren()) do
+            if obj.Name:match("^Section%d+") and obj.Name ~= "Section1" then
+                addGruntFolder(obj:FindFirstChild("Grunts"))
             end
         end
-        E.Queued = false
-        syncToggle(false)
-        setEgao(paused and "paused" or "stopped", reason or "Đã dừng trong phiên hiện tại.", paused and "error" or "idle", reason or "Dừng thủ công")
-    end
-    local function pause(reason)
-        stopEgao(reason, true)
-        notify("Egao / tạm dừng", reason)
-    end
-    local function requireQueue(reason)
-        if queueSelf(reason) then return true end
-        pause("Không thể xếp hàng chạy tiếp sau teleport. Cần executor hỗ trợ tiếp tục sau teleport (queue_on_teleport); bật lại khi khả năng này sẵn sàng.")
-        return false
-    end
-    local function remoteNamed(name)
-        local direct = ReplicatedStorage:FindFirstChild(name)
-        if direct and direct:IsA("RemoteEvent") then return direct end
-        for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
-            if child.Name == name and child:IsA("RemoteEvent") then return child end
-        end
-    end
-    local function gameLoaded(generation)
-        setEgao("loading", "Chờ Roblox tải và nhân vật sẵn sàng.")
-        if not waitUntil(function() return game:IsLoaded() end, 120, generation, 0.2) then
-            if running(generation) then pause("Game chưa tải xong sau 120 giây. Bật lại khi loading hoàn tất.") end
-            return false
-        end
-        return sleep(0.8, generation)
-    end
-    local function teleportLobby(generation, reason)
-        if not running(generation) then return end
-        local previousHops = E.Hops
-        E.Hops = E.Hops + 1
-        if not requireQueue(reason) then E.Hops = previousHops; refresh(true); return end
-        E.PendingTeleport, E.Retry = true, 0
-        setEgao("returning", "Không có tín hiệu; quay lại Lobby để thử lượt Forest mới.", "active", reason)
-        if not sleep(0.45, generation) then return end
-        -- Bounded retries, matching the supplied script's three delayed retries.
-        for attempt = 0, 3 do
-            if not running(generation) or not E.PendingTeleport then return end
-            if attempt > 0 then
-                if not sleep(4, generation) then return end
-                if not running(generation) then return end
-                if not requireQueue(reason) then return end
-                E.Retry = attempt
-                setEgao("returning", "Teleport Lobby · thử lại " .. attempt .. "/3.", "active", E.LastReason)
-            end
-            local ok, err = pcall(function() TeleportService:Teleport(LOBBY, Player) end)
-            if not ok then setEgao("returning", "Lệnh teleport lỗi: " .. tostring(err), "error", "Teleport rejected") end
-        end
-        if sleep(6, generation) and E.PendingTeleport then pause("Teleport Lobby chưa hoàn tất sau các lần thử. Kiểm tra kết nối rồi bật lại.") end
-    end
-    local function runLobby(generation)
-        if not gameLoaded(generation) then return end
-        setEgao("lobby", "Chọn Save 1 bằng MimicSaveSync(0, 1).", "active", "Lobby → Forest Save 1")
-        if not requireQueue("Lobby → Forest Save 1") then return end
-        E.PendingSave = true
-        for attempt = 1, 12 do
-            if not running(generation) then return end
-            local remote = remoteNamed("MimicSaveSync")
-            if remote then
-                local ok, err = pcall(function() remote:FireServer(0, 1) end)
-                setEgao("lobby", ok and ("Đã yêu cầu Save 1 / Forest · " .. attempt .. "/12.") or ("MimicSaveSync lỗi: " .. tostring(err)), ok and "active" or "error")
-                if not sleep(1.1, generation) then return end
-            else
-                setEgao("lobby", "Đợi MimicSaveSync · " .. attempt .. "/12.")
-                if not sleep(0.6, generation) then return end
-            end
-        end
-        if running(generation) then pause("Chưa vào Forest sau 12 lần. Kiểm tra Save 1 có lưu ở Forest rồi bật lại.") end
-    end
-    local function pulseFrame()
-        local gui = Player:FindFirstChildOfClass("PlayerGui")
-        local pulse = gui and gui:FindFirstChild("EgaoPulseText")
-        local frame = pulse and pulse:FindFirstChild("Frame")
-        return frame and frame:IsA("GuiObject") and frame or nil
-    end
-    local function forestReady(generation)
-        if not gameLoaded(generation) then return false end
-        setEgao("loading", "Đợi nhân vật trong Forest.")
-        if not waitUntil(root, 20, generation) then
-            if running(generation) then pause("Không tìm thấy HumanoidRootPart sau 20 giây.") end
-            return false
-        end
-        setEgao("intro", "Đợi IntroCutscene hoặc map / giao diện đã tải.")
-        local intro = waitUntil(function()
-            local object = Workspace:FindFirstChild("IntroCutscene")
-            if object then return object end
-            if Workspace:FindFirstChild("Section3") and pulseFrame() then return true end
-        end, 35, generation, 0.25)
-        if not running(generation) then return false end
-        if typeof(intro) == "Instance" and intro.Parent then
-            setEgao("intro", "Chờ IntroCutscene.SpawnBox biến mất (tối đa 90 giây).")
-            waitUntil(function() return not intro.Parent or not intro:FindFirstChild("SpawnBox") end, 90, generation, 0.1)
-        end
-        if not running(generation) then return false end
-        setEgao("map", "Đợi EgaoPulseText và Section3 (tối đa 35 giây).")
-        waitUntil(function() return Workspace:FindFirstChild("Section3") and pulseFrame() end, 35, generation, 0.25)
-        return sleep(1.2, generation)
-    end
-    local function runForest(generation)
-        if not forestReady(generation) then return end
-        local hrp = waitUntil(root, 18, generation)
-        if not hrp then
-            if running(generation) then pause("Không tìm thấy HumanoidRootPart để tới điểm kiểm tra.") end
-            return
-        end
-        setEgao("checkpoint", "Di chuyển 3 giây tới điểm kiểm tra Egao.")
-        local ok, err = pcall(function()
-            activeTween = TweenService:Create(hrp, TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), { CFrame = CHECKPOINT })
-            activeTween:Play()
-        end)
-        if not ok then return pause("Không tạo được tween tới điểm kiểm tra: " .. tostring(err)) end
-        if not sleep(3.15, generation) then return end
-        activeTween = nil
-        if not hrp.Parent or root() ~= hrp then return pause("Nhân vật đổi trong khi di chuyển. Bật lại sau khi hồi sinh.") end
-        local frame = waitUntil(pulseFrame, 30, generation, 0.15)
-        if not running(generation) then return end
-        if not frame then return teleportLobby(generation, "Không thấy EgaoPulseText sau loading + 30 giây") end
-        local seconds = 5 + math.clamp(ping() / 1000, 0, 3)
-        setEgao("pulse", "Chờ tín hiệu Egao trong " .. string.format("%.1f", seconds) .. " giây.")
-        local found = waitUntil(function()
-            local current = pulseFrame()
-            return E.Found or (current and current.Visible)
-        end, seconds, generation, 0.1)
-        if not running(generation) then return end
-        if found then startLook("Tín hiệu trong cửa sổ kiểm tra") else teleportLobby(generation, "EgaoPulseText không hiện trong cửa sổ kiểm tra") end
-    end
-    local function startEgao(resume)
-        if E.Running or not valid() then return end
-        if game.PlaceId ~= LOBBY and game.PlaceId ~= FOREST then
-            syncToggle(false)
-            return notify("Egao / vị trí", "Tính năng này chạy tại Main Lobby hoặc Book 3 Chapter 1. Hãy tới một trong hai nơi rồi bật.")
-        end
-        if not resume then
-            E.Hops, E.StartedAt = 0, os.time()
-            E.Session = tostring(os.time()) .. "-" .. tostring(math.random(100000, 999999))
-        end
-        E.StartedAt = E.StartedAt or os.time()
-        E.FinishedAt = nil
-        E.Running, E.Found, E.PendingTeleport, E.PendingSave, E.Queued = true, false, false, false, false
-        E.LookReason, E.Target = "Chờ tín hiệu", "—"
-        egaoGeneration = egaoGeneration + 1
-        local generation = egaoGeneration
-        environment()
-        syncToggle(true)
-        task.spawn(function()
-            local ok, err = xpcall(function()
-                if game.PlaceId == LOBBY then runLobby(generation) else runForest(generation) end
-            end, function(message) return debug.traceback(tostring(message), 2) end)
-            if not ok and running(generation) then pause("Lỗi tác vụ Egao: " .. tostring(err)) end
-        end)
-        task.spawn(function()
-            local lastFrame, wasVisible
-            while running(generation) do
-                local frame = pulseFrame()
-                E.PulseExists, E.Pulse = frame ~= nil, frame ~= nil and frame.Visible == true
-                if E.Pulse and (frame ~= lastFrame or not wasVisible) then startLook("EgaoPulseText hiện") end
-                lastFrame, wasVisible = frame, E.Pulse
-                refresh()
-                if not sleep(0.25, generation) then return end
-            end
-        end)
-    end
 
-    -- Nearby Kill adapter derived from cc; target-specific remotes never expand to a FleshBlock parent.
-    local function killRange(kind)
-        if kind == "Spider" then return math.clamp(nkOptions.SpiderRange, 0, 9999) end
-        if kind == "FleshBlock" then return math.clamp(nkOptions.FleshRange, 0, 9999) end
-        if kind == "Hogo" then return math.clamp(nkOptions.HogoRange, 0, 9999) end
-        return math.clamp(nkOptions.CreepRange, 0, 9999)
-    end
-    local function aimDot(position)
-        local camera = Workspace.CurrentCamera
-        if not camera then return 0 end
-        local delta = position - camera.CFrame.Position
-        return delta.Magnitude < 0.01 and 1 or math.clamp(camera.CFrame.LookVector:Dot(delta.Unit), -1, 1)
-    end
-    local function lookingAtBody(body)
-        if not partAlive(body) then return false end
-        local camera = Workspace.CurrentCamera
-        if not camera then return false end
-        local params = RaycastParams.new()
-        params.FilterType, params.IgnoreWater = Enum.RaycastFilterType.Exclude, true
-        params.FilterDescendantsInstances = Player.Character and { Player.Character } or {}
-        local result = Workspace:Raycast(camera.CFrame.Position, camera.CFrame.LookVector * 260, params)
-        if not result then return aimDot(body.Position) >= 0.86 end
-        local hit, block = result.Instance, body.Parent
-        return hit == body or hit:IsDescendantOf(body) or (block and (hit == block or hit:IsDescendantOf(block)))
-    end
-    local function nearestPart(object)
-        local hrp = root()
-        if not object or not object.Parent or not hrp then return nil, math.huge end
-        local best, distance
-        local function test(part)
-            if partAlive(part) then
-                local d = (part.Position - hrp.Position).Magnitude
-                if not best or d < distance then best, distance = part, d end
-            end
-        end
-        if object:IsA("BasePart") then test(object) else
-            for _, part in ipairs(object:GetDescendants()) do if part:IsA("BasePart") then test(part) end end
-        end
-        return best, distance or math.huge
-    end
-    local function remotesIn(object)
-        local list, seen = {}, {}
-        local function add(remote)
-            if remote and remote:IsA("RemoteEvent") and not seen[remote] and #list < 12 then
-                seen[remote] = true
-                table.insert(list, remote)
-            end
-        end
-        if not object or not object.Parent then return list end
-        if object:IsA("RemoteEvent") then add(object); return list end
-        add(object:FindFirstChildWhichIsA("RemoteEvent"))
-        for _, child in ipairs(object:GetDescendants()) do
-            if child:IsA("RemoteEvent") then add(child); if #list >= 12 then break end end
-        end
-        return list
-    end
-    local function refreshTarget(target)
-        if not target or not nkOptions.Filters[target.kind] or not target.instance.Parent then return false end
-        local hrp = root()
-        if not hrp then return false end
-        local humanoid = target.instance:IsA("Model") and target.instance:FindFirstChildOfClass("Humanoid")
-        if humanoid and humanoid.Health <= 0 then return false end
-        local anchor, distance
-        if target.kind == "Spider" then
-            anchor = target.instance:FindFirstChild("Hitbox")
-        elseif target.kind == "FleshBlock" then
-            anchor = target.body
-            if not partAlive(anchor) or anchor.Name:lower() ~= "body" or not lookingAtBody(anchor) then return false end
-        else anchor, distance = nearestPart(target.instance) end
-        if not partAlive(anchor) then return false end
-        distance = distance or (anchor.Position - hrp.Position).Magnitude
-        if distance > killRange(target.kind) then return false end
-        target.anchor, target.dist, target.dot = anchor, distance, aimDot(anchor.Position)
-        target.cframe = (target.kind == "Spider" or target.kind == "FleshBlock") and anchor.CFrame or CFrame.new(anchor.Position)
-        return true
-    end
-    local function chooseTarget()
-        local targets, seen = {}, {}
-        local function add(object, kind, body)
-            if not object or seen[body or object] or not nkOptions.Filters[kind] then return end
-            seen[body or object] = true
-            local target = { instance = object, kind = kind, body = body, lockedAt = os.clock(), remotesAt = 0 }
-            if refreshTarget(target) then table.insert(targets, target) end
-        end
-        local section1 = path({ "Section1", "Grunts" })
-        if section1 and nkOptions.Filters.Gata then
-            for _, object in ipairs(section1:GetChildren()) do
-                if object:IsA("Model") and object:FindFirstChildOfClass("Humanoid") then add(object, "Gata") end
-            end
-        end
-        if nkOptions.Filters.Grunt then
-            for _, section in ipairs(Workspace:GetChildren()) do
-                if section.Name:match("^Section%d+") and section.Name ~= "Section1" then
-                    local grunts = section:FindFirstChild("Grunts")
-                    if grunts then
-                        for _, object in ipairs(grunts:GetDescendants()) do
-                            if object:IsA("Model") and object.Name:lower():find("grunt", 1, true) then add(object, "Grunt") end
+        -- Muki/Muki2: cùng nhánh Creep, mở rộng bằng tên chứa "muki" để không miss biến thể cùng loại.
+        local mukiRoots = {
+            safeFolder({"Section4","Lab","Floor1","Objective2","MukiSpawn"}),
+            safeFolder({"Section4","Lab","Floor1","Objective2"}),
+        }
+        local seen = {}
+        for _, root in ipairs(mukiRoots) do
+            if root then
+                local pool = root:GetDescendants()
+                table.insert(pool, 1, root)
+                for _, obj in ipairs(pool) do
+                    if obj:IsA("Model") then
+                        local n = tostring(obj.Name or ""):lower()
+                        if n:find("muki", 1, true) and not seen[obj] then
+                            seen[obj] = true
+                            addCreep(obj)
                         end
                     end
                 end
             end
         end
-        local objective = path({ "Section4", "Lab", "Floor1", "Objective2" })
-        if objective and nkOptions.Filters.Muki then
-            for _, object in ipairs(objective:GetDescendants()) do
-                if object:IsA("Model") and object.Name:lower():find("muki", 1, true) then add(object, "Muki") end
+    end
+
+    -- Boss / NM boss ESP.
+    -- Update workspace mới: các bản NM đôi khi là Model trực tiếp
+    -- (workspace.Section2.Monster.AkariNM, workspace.Section2.Rage.AkariRageNM,
+    -- workspace.Section3.Monster.MizunoNM) và không phải lúc nào cũng expose Hitbox
+    -- ngay lúc scan. Vì vậy mỗi entry có cả hitboxPath + modelPath fallback.
+    local C_MON_NM = Color3.fromRGB(255, 115, 95)
+    local bosses = {
+        { hitboxPath = {"Section2","Monster","Akari","Hitbox"},      modelPath = {"Section2","Monster","Akari"},      label = "Akari",        color = C_MON },
+        { hitboxPath = {"Section2","Monster","AkariNM","Hitbox"},    modelPath = {"Section2","Monster","AkariNM"},    label = "AkariNM",      color = C_MON_NM },
+
+        { hitboxPath = {"Section2","Rage","AkariRage","Hitbox"},     modelPath = {"Section2","Rage","AkariRage"},     label = "Akari Rage",   color = C_MON },
+        { hitboxPath = {"Section2","Rage","AkariRageNM","Hitbox"},   modelPath = {"Section2","Rage","AkariRageNM"},   label = "AkariRageNM",  color = C_MON_NM },
+
+        { hitboxPath = {"Section3","Monster","Mizuno","Hitbox"},     modelPath = {"Section3","Monster","Mizuno"},     label = "Mizuno",       color = C_MON },
+        { hitboxPath = {"Section3","Monster","MizunoNM","Hitbox"},   modelPath = {"Section3","Monster","MizunoNM"},   label = "MizunoNM",     color = C_MON_NM },
+
+        { hitboxPath = {"Section4","Monster","HogoGuntai","Hitbox"}, modelPath = {"Section4","Monster","HogoGuntai"}, label = "HogoGuntai",   color = C_MON },
+        { hitboxPath = {"Section4","Monster","HogoGuntaiNM","Hitbox"}, modelPath = {"Section4","Monster","HogoGuntaiNM"}, label = "HogoGuntaiNM", color = C_MON_NM },
+        { hitboxPath = {"Section5","StairsSection","Monster","HogoGuntai","Hitbox"}, modelPath = {"Section5","StairsSection","Monster","HogoGuntai"}, label = "HogoGuntai", color = C_MON },
+        { hitboxPath = {"Section5","StairsSection","Monster","HogoGuntaiNM","Hitbox"}, modelPath = {"Section5","StairsSection","Monster","HogoGuntaiNM"}, label = "HogoGuntaiNM", color = C_MON_NM },
+        { hitboxPath = {"Section5","Monster","Baigai","Hitbox"},     modelPath = {"Section5","Monster","Baigai"},     label = "Baigai",       color = C_MON },
+        { hitboxPath = {"Section5","Monster","BaigaiNM","Hitbox"},   modelPath = {"Section5","Monster","BaigaiNM"},   label = "BaigaiNM",     color = C_MON_NM },
+    }
+
+    local function resolveBossEntry(b)
+        local anchor = safeFolder(b.hitboxPath)
+        local model = safeFolder(b.modelPath)
+
+        if anchor and not validPart(anchor) then
+            anchor = nil
+        end
+
+        if not anchor and model then
+            anchor = model:FindFirstChild("Hitbox")
+                or model:FindFirstChild("HumanoidRootPart")
+                or model:FindFirstChild("RootPart")
+                or model:FindFirstChild("Head")
+                or model:FindFirstChildWhichIsA("BasePart", true)
+        end
+
+        if not model and anchor then
+            model = anchor:FindFirstAncestorOfClass("Model") or anchor.Parent
+        end
+
+        if anchor and validPart(anchor) then
+            local adornee = (model and model:IsA("Model")) and model or anchor
+            return adornee, anchor
+        end
+        return nil, nil
+    end
+
+    if MonsterAllows.Boss then
+        for _, b in ipairs(bosses) do
+            local adornee, hitbox = resolveBossEntry(b)
+            if adornee and hitbox then
+                local key = makeUniqueKey("Monster_" .. b.label, adornee)
+                if espPool.Monster[key] and espPool.Monster[key].adornee ~= adornee then
+                    destroyEntry(espPool.Monster[key])
+                    espPool.Monster[key] = nil
+                end
+                createESPEntry("Monster", key, adornee, hitbox, b.label, b.color or C_MON)
             end
         end
-        if nkOptions.Filters.Hogo then
-            for _, names in ipairs({ { "Section5", "StairsSection", "Monster" }, { "Section4" } }) do
-                local folder = path(names)
-                if folder then
-                    local pool = folder:GetDescendants()
-                    table.insert(pool, 1, folder)
-                    for _, object in ipairs(pool) do
-                        if object:IsA("Model") and object.Name:lower():find("hogo", 1, true) then add(object, "Hogo") end
+    end
+end
+
+local function setMonsterESP(state)
+    States.ESPMonster = state
+    stopPoll("Monster")
+    clearPool("Monster")
+    if not state then return end
+
+    scanMonsters()
+
+    local t = 0
+    pollConns.Monster = RunService.Heartbeat:Connect(function(dt)
+        t = t + dt
+        if t >= 1.5 then
+            t = 0
+            prunePool("Monster")
+            if States.ESPMonster then scanMonsters() end
+        end
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ESP TASK (Granular - selectable task types with full model charms)
+-- ══════════════════════════════════════════════════════════════════════════════
+local C_TASK = Color3.fromRGB(80, 180, 255)
+
+-- Individual scan functions for each task type (adornee = Model for full Highlight charm)
+local function scanTaskBodies()
+    if not States.ESPTaskBody then return end
+    local deadCiv = safeFolder({"Section1","DeadCivilians"})
+    if not deadCiv then return end
+    for _, v in ipairs(deadCiv:GetChildren()) do
+        if v and v.Parent then
+            local hrp = v:FindFirstChild("HumanoidRootPart")
+            local prompt = hrp and hrp:FindFirstChildWhichIsA("ProximityPrompt")
+            if hrp and prompt and validPart(hrp) then
+                local key = makeUniqueKey("Task_Body", v)
+                if espPool.Task[key] and espPool.Task[key].adornee ~= v then
+                    destroyEntry(espPool.Task[key])
+                    espPool.Task[key] = nil
+                end
+                createESPEntry("Task", key, v, hrp, "Body", C_TASK)
+            end
+        end
+    end
+end
+
+local function scanTaskSpiders()
+    if not States.ESPTaskSpider then return end
+    local spiders = safeFolder({"Section2","MAINOBJECTIVE2","Spiders"})
+    if not spiders then return end
+    for _, v in ipairs(spiders:GetChildren()) do
+        if v.Name == "AkariSpider" then
+            local hitbox = v:FindFirstChild("Hitbox")
+            if hitbox and validPart(hitbox) then
+                local key = makeUniqueKey("Task_Spider", v)
+                if espPool.Task[key] and espPool.Task[key].adornee ~= v then
+                    destroyEntry(espPool.Task[key])
+                    espPool.Task[key] = nil
+                end
+                createESPEntry("Task", key, v, hitbox, "Spider", C_TASK)
+            end
+        end
+    end
+end
+
+local function scanTaskGenerators()
+    if not States.ESPTaskGenerator then return end
+    local circuits = safeFolder({"Section3","OBJECTIVE","Circuits"})
+    if not circuits then return end
+    for _, v in ipairs(circuits:GetChildren()) do
+        if v.Name == "CircuitPillar" then
+            local pp = v:FindFirstChild("PromptPart")
+            if pp and validPart(pp) then
+                local key = makeUniqueKey("Task_Gen", v)
+                if espPool.Task[key] and espPool.Task[key].anchor ~= pp then
+                    destroyEntry(espPool.Task[key])
+                    espPool.Task[key] = nil
+                end
+                createESPEntry("Task", key, v, pp, "Generator", C_TASK)
+            end
+        end
+    end
+end
+
+local function scanTaskTerminals()
+    if not States.ESPTaskTerminal then return end
+    local terminals = safeFolder({"Section4","Lab","CleanseRoomObjective","ShapeTerminals"})
+    if not terminals then return end
+    for _, v in ipairs(terminals:GetChildren()) do
+        local pp = v:FindFirstChild("PromptPart")
+        local pr = pp and pp:FindFirstChildWhichIsA("ProximityPrompt")
+        if pp and pr and validPart(pp) then
+            local key = makeUniqueKey("Task_Terminal", v)
+            if espPool.Task[key] and espPool.Task[key].anchor ~= pp then
+                destroyEntry(espPool.Task[key])
+                espPool.Task[key] = nil
+            end
+            createESPEntry("Task", key, v, pp, "Terminal", C_TASK)
+        end
+    end
+end
+
+local function scanTaskValves()
+    if not States.ESPTaskValve then return end
+    local valves = safeFolder({"Section4","Lab","CleanseRoomObjective","Valves"})
+    if not valves then return end
+    for _, v in ipairs(valves:GetChildren()) do
+        if v:IsA("Model") then
+            local icon = v:FindFirstChild("Notification") and v.Notification:FindFirstChild("Icon")
+            if icon and icon.Enabled then
+                local anchor = rootOf(v) or v:FindFirstChildWhichIsA("BasePart")
+                if anchor and validPart(anchor) then
+                    local key = makeUniqueKey("Task_Valve", v)
+                    if espPool.Task[key] and espPool.Task[key].anchor ~= anchor then
+                        destroyEntry(espPool.Task[key])
+                        espPool.Task[key] = nil
+                    end
+                    createESPEntry("Task", key, v, anchor, "Valve", C_TASK)
+                end
+            end
+        end
+    end
+end
+
+local function scanTaskWires()
+    if not States.ESPTaskWire then return end
+    local boxes = safeFolder({"Section5","MainObjective","Boxes"})
+    if not boxes then return end
+    for _, box in ipairs(boxes:GetChildren()) do
+        if box.Name == "WireBox" then
+            local pp = box:FindFirstChild("PromptPart")
+            local prompt = pp and pp:FindFirstChildWhichIsA("ProximityPrompt")
+            if pp and prompt and prompt.Enabled and validPart(pp) then
+                local key = makeUniqueKey("Task_Wire", box)
+                if espPool.Task[key] and espPool.Task[key].anchor ~= pp then
+                    destroyEntry(espPool.Task[key])
+                    espPool.Task[key] = nil
+                end
+                createESPEntry("Task", key, box, pp, "Wire", C_TASK)
+            end
+        end
+    end
+end
+
+local function scanTaskDirector()
+    if not States.ESPTaskDirector then return end
+    local root = safeFolder({"Section4","Lab","Floor1","Objective","DirectorSpawn"})
+    if not root then return end
+
+    local function addDirector(obj, label)
+        if not obj then return end
+        local anchor
+        if obj:IsA("BasePart") then
+            anchor = obj
+        else
+            local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+            anchor = (prompt and prompt.Parent and prompt.Parent:IsA("BasePart")) and prompt.Parent or rootOf(obj)
+        end
+        if not anchor or not validPart(anchor) then return end
+        local key = makeUniqueKey("Task_Director", obj)
+        if espPool.Task[key] and espPool.Task[key].anchor ~= anchor then
+            destroyEntry(espPool.Task[key])
+            espPool.Task[key] = nil
+        end
+        createESPEntry("Task", key, obj, anchor, label or "Director", C_TASK)
+    end
+
+    addDirector(root, "Director")
+    local director = root:FindFirstChild("Director")
+    if director then addDirector(director, "Director") end
+    local card = director and director:FindFirstChild("IDCARD2")
+    if card then addDirector(card, "ID Card") end
+end
+
+-- Additional objective markers and a single-session Egao assistant.
+-- Egao face order/checkpoint/1s settle/62s look window follow the supplied Egao extension.
+-- No lobby hopping or queued loader is used in this B3C1 test build.
+local Extra = (function()
+    local api = {}
+    local alive, generation, running, autoLook = true, 0, false, true
+    local activeTween, heartbeat, bindActive, statusCard
+    local phase, detail = "Chưa chạy", "Kiểm tra một lượt tại Forest; không tự đổi server."
+    local bindName = "NevoirsEgaoLook_" .. tostring(math.random(100000, 999999))
+    local rigs = setmetatable({}, { __mode = "k" })
+    local targetRig, targetPart, targetName, pendingRig, lookStarted
+    local timeAccumulator, lookAllowed, lastAnnouncedRig = 0, false, nil
+    local paths = {
+        { key = "BoulderSeal", path = {"Section4","Lab","Floor1","Objective2","C4Explode","BoulderSeal"}, label = "Boulder Seal" },
+        { key = "Cutter", path = {"Section1","SchoolGatePart","Truck","BoltCutter"}, label = "Bolt Cutter", prompt = true },
+        { key = "Bandage", path = {"Section2","Items","Bandage"}, label = "Bandage", prompt = true },
+        { key = "Diary", path = {"Section2","MAINOBJECTIVE","Diary"}, label = "Diary", prompt = true },
+        { key = "EntranceCard", path = {"Section4","Lab","Floor1","Entrance","IDCARD"}, label = "Lab Keycard", prompt = true },
+        { key = "C4", path = {"Section4","Lab","Floor1","Objective2","C4Explode"}, label = "C4 • 1", children = "C4Bomb", prompt = true },
+        { key = "C4", path = {"Section4","Lab","Floor1","Objective3","C4Explode"}, label = "C4 • 2", children = "C4Bomb", prompt = true },
+        { key = "PowerSwitch", path = {"Section5","MainObjective","PowerSwitch"}, label = "Main Switch", prompt = true },
+    }
+    local function notify(title, text)
+        if WindUI and WindUI.Notify then
+            pcall(function() WindUI:Notify({ Title = title, Content = text, Icon = "smile", Duration = 4 }) end)
+        end
+    end
+    local function anchorFor(obj)
+        local prompt = obj and obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+        local anchor = prompt and prompt.Parent
+        if anchor and anchor:IsA("Attachment") then anchor = anchor.Parent end
+        if not validPart(anchor) then
+            anchor = rootOf(obj)
+            if not validPart(anchor) and obj then anchor = obj:FindFirstChildWhichIsA("BasePart", true) end
+        end
+        return anchor, prompt
+    end
+    function api.ScanObjectives()
+        local seen = {}
+        if States.ESPTaskExtra then
+            local function add(obj, entry)
+                if not obj or not obj.Parent then return end
+                local anchor, prompt = anchorFor(obj)
+                if not validPart(anchor) or (entry.prompt and (not prompt or not prompt.Enabled)) then return end
+                -- Folder prompts cannot be Highlight adornees: choose their actual model/part.
+                local adornee = validAdornee(obj) and obj or anchor
+                local key = makeUniqueKey("Task_Extra_" .. entry.key, obj)
+                seen[key] = true
+                local current = espPool.Task[key]
+                if current and (current.anchor ~= anchor or current.adornee ~= adornee) then
+                    destroyEntry(current)
+                    espPool.Task[key] = nil
+                end
+                createESPEntry("Task", key, adornee, anchor, entry.label, C_TASK)
+            end
+            for _, entry in ipairs(paths) do
+                if TaskAllows[entry.key] then
+                    local object = safeFolder(entry.path)
+                    if entry.children then
+                        for _, child in ipairs(object and object:GetChildren() or {}) do
+                            if child.Name == entry.children then add(child, entry) end
+                        end
+                    else add(object, entry) end
+                end
+            end
+        end
+        -- Refresh task eligibility as well as existence; completed prompts lose their markers.
+        for key, entry in pairs(espPool.Task) do
+            if key:sub(1, 11) == "Task_Extra_" and not seen[key] then
+                destroyEntry(entry)
+                espPool.Task[key] = nil
+            end
+        end
+    end
+    local function refreshStatus()
+        if statusCard and statusCard.SetDesc then
+            local text = phase .. "\n" .. detail
+            if targetPart and validPart(targetPart) then
+                local hrp = getHRP(getChar())
+                text = text .. "\n" .. tostring(targetName) .. (hrp and (" • " .. math.floor((hrp.Position - targetPart.Position).Magnitude) .. " st") or "")
+            end
+            pcall(function() statusCard:SetDesc(text) end)
+        end
+    end
+    local function setStatus(nextPhase, nextDetail)
+        phase, detail = nextPhase, nextDetail
+        refreshStatus()
+    end
+    local function pulseFrame()
+        local gui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local pulse = gui and gui:FindFirstChild("EgaoPulseText")
+        local frame = pulse and pulse:FindFirstChild("Frame")
+        if not frame or not frame:IsA("GuiObject") then return nil end
+        local ancestor = frame
+        while ancestor and ancestor ~= gui do
+            if ancestor:IsA("GuiObject") and not ancestor.Visible then return frame, false end
+            if ancestor:IsA("ScreenGui") and not ancestor.Enabled then return frame, false end
+            ancestor = ancestor.Parent
+        end
+        return frame, true
+    end
+    local facePriority = {"sw face", "r eye", "l eye", "teeth", "gums", "head", "face", "RootPart"}
+    local function partInRig(rig)
+        for _, name in ipairs(facePriority) do
+            local part = rig:FindFirstChild(name, true)
+            if validPart(part) then return part, name end
+        end
+    end
+    local function registerRigs()
+        for _, object in ipairs(Workspace:GetChildren()) do
+            if object.Name == "EgaoEventRig" and object:IsA("Model") and not rigs[object] then
+                rigs[object] = os.clock()
+                pendingRig = object
+                targetRig, targetPart, targetName = nil, nil, nil
+            end
+        end
+        for object in pairs(rigs) do
+            if not object.Parent or not object:IsDescendantOf(Workspace) then rigs[object] = nil end
+        end
+    end
+    local function selectRig()
+        local now, best, bestPart, bestName, bestDistance = os.clock(), nil, nil, nil, math.huge
+        local hrp = getHRP(getChar())
+        if pendingRig and rigs[pendingRig] then
+            if now - rigs[pendingRig] < 1 then return nil end
+            local part, name = partInRig(pendingRig)
+            if part then
+                best, bestPart, bestName = pendingRig, part, name
+            elseif now - rigs[pendingRig] < 3.2 then return nil end
+            pendingRig = nil
+        end
+        if not best and targetRig and targetRig.Parent and rigs[targetRig] then
+            local part, name = partInRig(targetRig)
+            if part then best, bestPart, bestName = targetRig, part, name end
+        end
+        if not best then
+            for rig, firstSeen in pairs(rigs) do
+                if now - firstSeen >= 1 then
+                    local part, name = partInRig(rig)
+                    local distance = part and hrp and (hrp.Position - part.Position).Magnitude or math.huge
+                    if part and (not best or distance < bestDistance) then
+                        best, bestPart, bestName, bestDistance = rig, part, name, distance
                     end
                 end
             end
         end
-        local stairs = path({ "Section5", "StairsSection" })
-        if stairs and nkOptions.Filters.FleshBlock then
-            for _, object in ipairs(stairs:GetDescendants()) do
-                if object:IsA("BasePart") and object.Name:lower() == "body" and object:GetFullName():lower():find("fleshblock", 1, true) then
-                    add(object.Parent, "FleshBlock", object)
+        targetRig, targetPart, targetName = best, bestPart, bestName
+        return best
+    end
+    local function stopLook()
+        if bindActive then pcall(function() RunService:UnbindFromRenderStep(bindName) end) end
+        bindActive = false
+    end
+    local function startLook()
+        if bindActive or not autoLook or not lookAllowed then return end
+        bindActive, lookStarted = true, os.clock()
+        RunService:BindToRenderStep(bindName, Enum.RenderPriority.Camera.Value + 1, function()
+            if not alive or not running or not autoLook or not lookAllowed then return stopLook() end
+            if os.clock() - lookStarted >= 62 then
+                lookAllowed = false
+                stopLook()
+                setStatus("Đã nhả camera", "Đủ 62 giây cho đợt hiện tại; tiếp tục quan sát tín hiệu/rig mới.")
+                return
+            end
+            if validPart(targetPart) and targetRig and targetRig.Parent then
+                local camera = Workspace.CurrentCamera
+                if camera then
+                    local position = targetPart.Position + (targetName == "RootPart" and Vector3.new(0, 3.35, 0) or Vector3.zero)
+                    if (position - camera.CFrame.Position).Magnitude > 0.5 then
+                        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, position)
+                    end
+                end
+            end
+        end)
+    end
+    function api.Stop(reason)
+        generation = generation + 1
+        running, lookAllowed = false, false
+        if activeTween then pcall(function() activeTween:Cancel() end); activeTween = nil end
+        if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
+        stopLook()
+        targetRig, targetPart, targetName, pendingRig = nil, nil, nil, nil
+        table.clear(rigs)
+        lastAnnouncedRig = nil
+        setStatus("Đã dừng", reason or "Không có phiên kiểm tra hoặc điều khiển camera đang chạy.")
+    end
+    function api.Monitor()
+        if not alive then return false end
+        api.Stop("Bắt đầu lượt mới.")
+        if not safeFolder({"Section3"}) then
+            setStatus("Chưa sẵn sàng", "Cần Forest/Section3 tải xong; không tự tới lobby hay tải Save.")
+            notify("Egao", detail)
+            return false
+        end
+        running = true
+        local char = getChar()
+        local wasPulse, lostFor = false, 0
+        setStatus("Đang quan sát", "Chờ tín hiệu hoặc EgaoEventRig; chưa xác nhận event.")
+        heartbeat = RunService.Heartbeat:Connect(function(dt)
+            timeAccumulator = timeAccumulator + dt
+            if timeAccumulator < 0.15 then return end
+            local elapsed = timeAccumulator
+            timeAccumulator = 0
+            local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+            if getChar() ~= char or not char or not humanoid or humanoid.Health <= 0 then
+                api.Stop("Nhân vật đổi hoặc đã chết; hãy bắt đầu lượt mới sau hồi sinh.")
+                return
+            end
+            if not safeFolder({"Section3"}) then return api.Stop("Đã rời Forest/Section3.") end
+            registerRigs()
+            local rig = selectRig()
+            local _, pulse = pulseFrame()
+            if pulse and not wasPulse then
+                lookAllowed = true
+                stopLook()
+                if not rig then setStatus("Có tín hiệu UI", "Chưa thấy EgaoEventRig; tín hiệu UI chưa xác nhận event.") end
+            end
+            wasPulse = pulse == true
+            if rig then
+                lostFor = 0
+                if lastAnnouncedRig ~= rig then
+                    lastAnnouncedRig = rig
+                    lookAllowed = true
+                    stopLook()
+                    notify("Egao • phát hiện rig", "Đã thấy EgaoEventRig; không đồng nghĩa đã hoàn tất event.")
+                end
+                if bindActive then
+                    phase, detail = "Đang nhìn Egao", "Đã xác nhận rig; theo dõi mặt tối đa 62 giây mỗi đợt."
+                elseif lookAllowed then
+                    phase, detail = "Đã thấy rig Egao", autoLook and "Chuẩn bị theo dõi mặt." or "Auto Look tắt; bạn điều khiển camera."
+                end
+                startLook()
+            else
+                if bindActive then stopLook() end
+                lostFor = lostFor + elapsed
+                if lostFor >= 3 and lastAnnouncedRig then
+                    lastAnnouncedRig = nil
+                    setStatus("Không thấy rig", "Có thể đang đổi phase hoặc rig chưa tải; chưa xác nhận event hoàn tất.")
+                end
+            end
+            refreshStatus()
+        end)
+        return true
+    end
+    function api.Checkpoint()
+        if activeTween then return notify("Egao", "Đang tới điểm kiểm tra. Dừng trước khi thử lại.") end
+        if not api.Monitor() then return end
+        local thisGeneration = generation
+        local hrp = getHRP(getChar())
+        if not validPart(hrp) then return api.Stop("Không có HumanoidRootPart hợp lệ.") end
+        local ok, err = pcall(function()
+            activeTween = game:GetService("TweenService"):Create(hrp, TweenInfo.new(3, Enum.EasingStyle.Linear), { CFrame = CFrame.new(-3658, 8, 372) })
+            activeTween:Play()
+        end)
+        if not ok then return api.Stop("Không thể tới điểm kiểm tra: " .. tostring(err)) end
+        setStatus("Tới điểm kiểm tra", "Di chuyển một lần trong 3 giây; không tự đổi server khi không có event.")
+        task.delay(3.2, function()
+            if not alive or not running or generation ~= thisGeneration then return end
+            activeTween = nil
+            if getHRP(getChar()) ~= hrp then return api.Stop("Nhân vật đổi trong khi di chuyển.") end
+            if (hrp.Position - Vector3.new(-3658, 8, 372)).Magnitude > 20 then
+                setStatus("Chưa tới điểm kiểm tra", "Vị trí chưa khớp; theo dõi vẫn bật, bạn có thể dừng và thử lại.")
+            elseif not lastAnnouncedRig then
+                setStatus("Đang kiểm tra tại điểm", "Chờ tín hiệu và rig; không có tín hiệu không khẳng định server thiếu event.")
+            end
+        end)
+    end
+    function api.SetAutoLook(value)
+        autoLook = value == true
+        if not autoLook then
+            stopLook()
+            if running and targetRig then setStatus("Đã thấy rig Egao", "Auto Look tắt; bạn điều khiển camera.") end
+        elseif running and targetRig then lookAllowed = true; startLook() end
+    end
+    function api.BuildUI(tab)
+        safeDivider(tab)
+        safeParagraph(tab, "Egao • một lượt Forest", "Quan sát hoặc tới điểm kiểm tra; không tự hop/lặp Save.", "smile")
+        pcall(function() statusCard = tab:Paragraph({ Title = "Trạng thái Egao", Desc = phase .. "\n" .. detail, Image = "activity" }) end)
+        addButton(tab, "Egao • quan sát tại chỗ", "Chờ tín hiệu và xác nhận rig; không TP.", api.Monitor)
+        addButton(tab, "Egao • tới điểm kiểm tra", "Di chuyển một lần tới checkpoint của nguồn Egao bổ sung.", api.Checkpoint)
+        addToggle(tab, "Egao • Auto Look", "Theo dõi rig sau 1 giây ổn định, tối đa 62 giây mỗi đợt.", true, api.SetAutoLook)
+        addButton(tab, "Egao • nhả camera và dừng", "Hủy di chuyển và mọi theo dõi Egao trong phiên này.", function() api.Stop("Dừng thủ công.") end)
+    end
+    function api.cleanup()
+        alive = false
+        api.Stop("Đã unload.")
+    end
+    return api
+end)()
+
+local function scanAllActiveTasks()
+    scanTaskBodies()
+    scanTaskSpiders()
+    scanTaskGenerators()
+    scanTaskTerminals()
+    scanTaskValves()
+    scanTaskWires()
+    scanTaskDirector()
+    Extra.ScanObjectives()
+end
+
+local function isAnyTaskESPActive()
+    return States.ESPTaskBody or States.ESPTaskSpider or States.ESPTaskGenerator
+        or States.ESPTaskTerminal or States.ESPTaskValve or States.ESPTaskWire
+        or States.ESPTaskDirector or States.ESPTaskExtra
+end
+
+local function clearTaskType(prefix)
+    for k, e in pairs(espPool.Task) do
+        if k:match("^Task_" .. prefix) then
+            destroyEntry(e)
+            espPool.Task[k] = nil
+        end
+    end
+end
+
+local taskPollConn
+local function stopTaskPoll()
+    if taskPollConn then
+        taskPollConn:Disconnect()
+        taskPollConn = nil
+    end
+end
+
+local function startTaskPollIfNeeded()
+    if taskPollConn then return end
+    local t = 0
+    taskPollConn = RunService.Heartbeat:Connect(function(dt)
+        t = t + dt
+        if t >= 1 then
+            t = 0
+            prunePool("Task")
+            if isAnyTaskESPActive() then
+                scanAllActiveTasks()
+            else
+                stopTaskPoll()
+            end
+        end
+    end)
+end
+
+-- Individual toggle functions for each task type
+local function setTaskBodyESP(state)
+    States.ESPTaskBody = state
+    clearTaskType("Body")
+    if state then
+        scanTaskBodies()
+        startTaskPollIfNeeded()
+    elseif not isAnyTaskESPActive() then
+        stopTaskPoll()
+    end
+end
+
+local function setTaskSpiderESP(state)
+    States.ESPTaskSpider = state
+    clearTaskType("Spider")
+    if state then
+        scanTaskSpiders()
+        startTaskPollIfNeeded()
+    elseif not isAnyTaskESPActive() then
+        stopTaskPoll()
+    end
+end
+
+local function setTaskGeneratorESP(state)
+    States.ESPTaskGenerator = state
+    clearTaskType("Gen")
+    if state then
+        scanTaskGenerators()
+        startTaskPollIfNeeded()
+    elseif not isAnyTaskESPActive() then
+        stopTaskPoll()
+    end
+end
+
+local function setTaskTerminalESP(state)
+    States.ESPTaskTerminal = state
+    clearTaskType("Terminal")
+    if state then
+        scanTaskTerminals()
+        startTaskPollIfNeeded()
+    elseif not isAnyTaskESPActive() then
+        stopTaskPoll()
+    end
+end
+
+local function setTaskValveESP(state)
+    States.ESPTaskValve = state
+    clearTaskType("Valve")
+    if state then
+        scanTaskValves()
+        startTaskPollIfNeeded()
+    elseif not isAnyTaskESPActive() then
+        stopTaskPoll()
+    end
+end
+
+local function setTaskWireESP(state)
+    States.ESPTaskWire = state
+    clearTaskType("Wire")
+    if state then
+        scanTaskWires()
+        startTaskPollIfNeeded()
+    elseif not isAnyTaskESPActive() then
+        stopTaskPoll()
+    end
+end
+
+local function setTaskDirectorESP(state)
+    States.ESPTaskDirector = state
+    clearTaskType("Director")
+    if state then
+        scanTaskDirector()
+        startTaskPollIfNeeded()
+    elseif not isAnyTaskESPActive() then
+        stopTaskPoll()
+    end
+end
+
+local function refreshMonsterESP()
+    if States.ESPMonster then setMonsterESP(true) end
+end
+
+local function setMonsterAllowGata(state)
+    MonsterAllows.Gata = state
+    refreshMonsterESP()
+end
+
+local function setMonsterAllowBoss(state)
+    MonsterAllows.Boss = state
+    refreshMonsterESP()
+end
+
+local function applyTaskMaster()
+    setTaskBodyESP(States.ESPTaskMaster and TaskAllows.Body)
+    setTaskSpiderESP(States.ESPTaskMaster and TaskAllows.Spider)
+    setTaskGeneratorESP(States.ESPTaskMaster and TaskAllows.Generator)
+    setTaskTerminalESP(States.ESPTaskMaster and TaskAllows.Terminal)
+    setTaskValveESP(States.ESPTaskMaster and TaskAllows.Valve)
+    setTaskWireESP(States.ESPTaskMaster and TaskAllows.Wire)
+    setTaskDirectorESP(States.ESPTaskMaster and TaskAllows.Director)
+    States.ESPTaskExtra = States.ESPTaskMaster and (
+        TaskAllows.BoulderSeal or TaskAllows.Cutter or TaskAllows.Bandage
+        or TaskAllows.Diary or TaskAllows.EntranceCard or TaskAllows.C4 or TaskAllows.PowerSwitch
+    ) or false
+    Extra.ScanObjectives()
+    if States.ESPTaskExtra then startTaskPollIfNeeded()
+    elseif not isAnyTaskESPActive() then stopTaskPoll() end
+end
+
+local function setTaskMasterESP(state)
+    States.ESPTaskMaster = state
+    applyTaskMaster()
+end
+
+local function setTaskAllow(kind, state)
+    TaskAllows[kind] = state
+    applyTaskMaster()
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- AUTO YEN SUPPORT (logic gốc: Workspace.MimicCurrencySpawns.Yen + prompt <= 10 studs)
+-- Nằm ở tab Main/Auto, không đưa vào ESP tab để tránh rối.
+-- ══════════════════════════════════════════════════════════════════════════════
+local C_YEN = Color3.fromRGB(255, 220, 55)
+local YEN_COLLECT_RANGE = 10
+
+local function getYenFolders()
+    local out, seen = {}, {}
+    local function add(folder)
+        if folder and folder.Parent and not seen[folder] then
+            seen[folder] = true
+            table.insert(out, folder)
+        end
+    end
+
+    -- Path cũ.
+    local oldRoot = Workspace:FindFirstChild("MimicCurrencySpawns")
+    add(oldRoot and oldRoot:FindFirstChild("Yen"))
+
+    -- Workspace mới theo finder: workspace.Yen.YenCoin.
+    add(Workspace:FindFirstChild("Yen"))
+
+    -- Fallback nhẹ cho các biến thể tên folder, không GetDescendants toàn map.
+    add(Workspace:FindFirstChild("YenSpawns"))
+    add(Workspace:FindFirstChild("CurrencyYen"))
+
+    return out
+end
+
+local function getYenFolder()
+    local folders = getYenFolders()
+    return folders[1]
+end
+
+local function getLocalDistance(part)
+    local hrp = getHRP(getChar())
+    if not hrp or not part or not part:IsA("BasePart") then return math.huge end
+    return (part.Position - hrp.Position).Magnitude
+end
+
+local function findYenPrompt(yen)
+    if not yen or not yen.Parent then return nil end
+    if yen:IsA("ProximityPrompt") then return yen end
+
+    local direct = yen:FindFirstChildWhichIsA("ProximityPrompt")
+    if direct then return direct end
+
+    for _, d in ipairs(yen:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then
+            return d
+        end
+    end
+    return nil
+end
+
+local function getYenAnchor(yen)
+    if not yen or not yen.Parent then return nil end
+    if yen:IsA("BasePart") then return yen end
+
+    local prompt = findYenPrompt(yen)
+    local p = prompt and prompt.Parent
+    if p and p:IsA("BasePart") then return p end
+    if p and p:IsA("Attachment") and p.Parent and p.Parent:IsA("BasePart") then return p.Parent end
+
+    return rootOf(yen)
+end
+
+local function fireYenPrompt(prompt)
+    if not prompt or prompt.Enabled == false then return false end
+    local ok = false
+    pcall(function() prompt.HoldDuration = 0 end)
+    ok = pcall(function() fireproximityprompt(prompt, 1, true) end) or ok
+    ok = pcall(function() fireproximityprompt(prompt, 1) end) or ok
+    ok = pcall(function() fireproximityprompt(prompt) end) or ok
+    return ok
+end
+
+local function touchYenAnchor(anchor)
+    local hrp = getHRP(getChar())
+    if not hrp or not anchor or not validPart(anchor) then return false end
+    local ok = false
+    if type(firetouchinterest) == "function" then
+        ok = pcall(function() firetouchinterest(hrp, anchor, 0) end) or ok
+        task.wait()
+        ok = pcall(function() firetouchinterest(hrp, anchor, 1) end) or ok
+    end
+    return ok
+end
+
+local function scanYenSupport()
+    local folders = getYenFolders()
+    if #folders == 0 then
+        if States.AutoYenESP then clearPool("Yen") end
+        return
+    end
+
+    local seen = {}
+    for _, folder in ipairs(folders) do
+        for _, yen in ipairs(folder:GetChildren()) do
+            if yen and yen.Parent and not seen[yen] then
+                seen[yen] = true
+                local anchor = getYenAnchor(yen)
+                if anchor and validPart(anchor) then
+                    if States.AutoYenCollect and getLocalDistance(anchor) <= YEN_COLLECT_RANGE then
+                        local prompt = findYenPrompt(yen)
+                        local fired = prompt and fireYenPrompt(prompt)
+                        if not fired then
+                            touchYenAnchor(anchor)
+                        end
+                    end
+
+                    if States.AutoYenESP then
+                        local adornee = (yen:IsA("Model") or yen:IsA("BasePart")) and yen or anchor
+                        local key = makeUniqueKey("Yen", yen)
+                        createESPEntry("Yen", key, adornee, anchor, "Yen", C_YEN)
+                    end
                 end
             end
         end
-        local spiders = path({ "Section2", "MAINOBJECTIVE2", "Spiders" })
-        if spiders and nkOptions.Filters.Spider then
-            for _, object in ipairs(spiders:GetChildren()) do if object.Name == "AkariSpider" then add(object, "Spider") end end
+    end
+
+    if States.AutoYenESP then
+        prunePool("Yen")
+    end
+end
+
+local function isYenSupportActive()
+    return States.AutoYenESP or States.AutoYenCollect
+end
+
+local function startYenSupportLoop()
+    if pollConns.Yen then return end
+    local t = 0
+    pollConns.Yen = RunService.Heartbeat:Connect(function(dt)
+        t = t + dt
+        if t < 0.20 then return end
+        t = 0
+
+        if not isYenSupportActive() then
+            clearPool("Yen")
+            stopPoll("Yen")
+            return
         end
-        -- Deterministic selection avoids the non-transitive comparator in cc.
-        -- Exclude FleshBlock while an eligible Hogo exists, then rank aim buckets and distance.
-        local hasHogo = false
-        for _, target in ipairs(targets) do if target.kind == "Hogo" then hasHogo = true; break end end
-        local best, bestFront, bestAim
-        for _, target in ipairs(targets) do
-            if not (hasHogo and target.kind == "FleshBlock") then
-                local front, aim = target.dot >= 0.45 and 1 or 0, math.floor((target.dot + 1) / 0.12)
-                if not best or front > bestFront or (front == bestFront and (aim > bestAim or (aim == bestAim and target.dist < best.dist))) then
-                    best, bestFront, bestAim = target, front, aim
+
+        scanYenSupport()
+    end)
+end
+
+local function setYenESP(state)
+    States.AutoYenESP = state and true or false
+    if States.AutoYenESP then
+        scanYenSupport()
+        startYenSupportLoop()
+    else
+        clearPool("Yen")
+        if not isYenSupportActive() then stopPoll("Yen") end
+    end
+end
+
+local function setYenCollect(state)
+    States.AutoYenCollect = state and true or false
+    if States.AutoYenCollect then
+        startYenSupportLoop()
+    elseif not isYenSupportActive() then
+        stopPoll("Yen")
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- LOCAL PLAYER: INSTANT E
+-- Chỉ đổi thời gian giữ; không đổi khoảng cách, line-of-sight hay tự kích hoạt.
+-- Theo dõi prompt tải muộn và khôi phục giá trị khi tắt/reload.
+-- ══════════════════════════════════════════════════════════════════════════════
+local InstantInteract = { prompts = {}, added = nil, removing = nil }
+
+function InstantInteract:restorePrompt(prompt)
+    local record = self.prompts[prompt]
+    if not record then return end
+    self.prompts[prompt] = nil
+    if record.changed then record.changed:Disconnect() end
+    pcall(function()
+        if prompt.HoldDuration == 0 then
+            prompt.HoldDuration = record.duration
+        end
+    end)
+end
+
+function InstantInteract:track(prompt)
+    if not States.InstantInteract or not prompt:IsA("ProximityPrompt") or self.prompts[prompt] then return end
+    local ok, duration = pcall(function() return prompt.HoldDuration end)
+    if not ok then return end
+    local record = { duration = duration }
+    self.prompts[prompt] = record
+    record.changed = prompt:GetPropertyChangedSignal("HoldDuration"):Connect(function()
+        if not States.InstantInteract or self.prompts[prompt] ~= record then return end
+        pcall(function()
+            local current = prompt.HoldDuration
+            if current ~= 0 then
+                -- Giữ lại thời gian mới do game đặt để khôi phục đúng khi tắt.
+                record.duration = current
+                prompt.HoldDuration = 0
+            end
+        end)
+    end)
+    pcall(function() prompt.HoldDuration = 0 end)
+end
+
+function InstantInteract:scan()
+    if not States.InstantInteract then return end
+    for _, instance in ipairs(Workspace:GetDescendants()) do
+        if instance:IsA("ProximityPrompt") then self:track(instance) end
+    end
+end
+
+function InstantInteract:stop()
+    States.InstantInteract = false
+    if self.added then self.added:Disconnect(); self.added = nil end
+    if self.removing then self.removing:Disconnect(); self.removing = nil end
+    local pending = {}
+    for prompt in pairs(self.prompts) do pending[#pending + 1] = prompt end
+    for _, prompt in ipairs(pending) do self:restorePrompt(prompt) end
+end
+
+function InstantInteract:setEnabled(enabled)
+    self:stop()
+    if not enabled then return end
+    States.InstantInteract = true
+    self.added = Workspace.DescendantAdded:Connect(function(instance)
+        self:track(instance)
+    end)
+    self.removing = Workspace.DescendantRemoving:Connect(function(instance)
+        self:restorePrompt(instance)
+    end)
+    self:scan()
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- LOGIC: TPWALK
+-- ══════════════════════════════════════════════════════════════════════════════
+local tpwalkConn
+local function applyTPWalk()
+    if tpwalkConn then tpwalkConn:Disconnect(); tpwalkConn = nil end
+    if not States.TPWalk then return end
+    tpwalkConn = RunService.Heartbeat:Connect(function(dt)
+        pcall(function()
+            local char = getChar()
+            if not char then return end
+            local hum = char:FindFirstChildWhichIsA("Humanoid")
+            if hum and hum.MoveDirection.Magnitude > 0 then
+                char:TranslateBy(hum.MoveDirection * TPWalkSpeed * dt * 10)
+            end
+        end)
+    end)
+end
+local function toggleTPWalk(e) States.TPWalk = e; applyTPWalk() end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- LOGIC: NOCLIP
+-- Dạng tối giản giống Infinite Yield: bật thì ép CanCollide=false theo Stepped,
+-- tắt thì chỉ ngắt loop. Không reset Humanoid/velocity/camera để tránh giật,
+-- lock hướng, hoặc lỗi cutscene.
+-- ══════════════════════════════════════════════════════════════════════════════
+local noclipConn
+local noclipCollisionCache = setmetatable({}, { __mode = "k" })
+
+local function restoreNoclipCollision()
+    for part, oldValue in pairs(noclipCollisionCache) do
+        if typeof(part) == "Instance" and part.Parent then
+            pcall(function() part.CanCollide = oldValue end)
+        end
+    end
+    noclipCollisionCache = setmetatable({}, { __mode = "k" })
+end
+
+local function setCharacterNoclip(char)
+    char = char or getChar()
+    if not char then return end
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            if noclipCollisionCache[part] == nil then
+                noclipCollisionCache[part] = part.CanCollide
+            end
+            if part.CanCollide then
+                pcall(function() part.CanCollide = false end)
+            end
+        end
+    end
+end
+
+local function applyNoclip()
+    if noclipConn then
+        noclipConn:Disconnect()
+        noclipConn = nil
+    end
+
+    if not States.Noclip then
+        return
+    end
+
+    setCharacterNoclip(getChar())
+
+    noclipConn = RunService.Stepped:Connect(function()
+        if not States.Noclip then
+            if noclipConn then
+                noclipConn:Disconnect()
+                noclipConn = nil
+            end
+            return
+        end
+        setCharacterNoclip(getChar())
+    end)
+end
+
+local function toggleNoclip(e)
+    States.Noclip = e and true or false
+    if States.Noclip then
+        applyNoclip()
+    else
+        if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
+        restoreNoclipCollision()
+    end
+end
+
+pcall(function()
+    _G.__NevoirsLastNoclipCleanup = function()
+        if noclipConn then
+            noclipConn:Disconnect()
+            noclipConn = nil
+        end
+        States.Noclip = false
+        restoreNoclipCollision()
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- LOGIC: MOONWALK / REVERSE FACING
+-- Xoay hướng nhân vật ngược lại với hướng camera theo trục ngang.
+-- Không dùng BodyGyro/BodyVelocity, không reset velocity, không đổi Humanoid state.
+-- ══════════════════════════════════════════════════════════════════════════════
+local moonwalkConn
+local moonwalkAutoRotateCache = setmetatable({}, { __mode = "k" })
+
+local function clearMoonwalkAutoRotate()
+    for hum, oldAutoRotate in pairs(moonwalkAutoRotateCache) do
+        if typeof(hum) == "Instance" and hum.Parent then
+            pcall(function()
+                hum.AutoRotate = oldAutoRotate
+            end)
+        end
+    end
+    moonwalkAutoRotateCache = setmetatable({}, { __mode = "k" })
+end
+
+local function setMoonwalkHumanoid(hum)
+    if not hum then return end
+    if moonwalkAutoRotateCache[hum] == nil then
+        moonwalkAutoRotateCache[hum] = hum.AutoRotate
+    end
+    if hum.AutoRotate ~= false then
+        pcall(function() hum.AutoRotate = false end)
+    end
+end
+
+local function applyMoonwalk()
+    if moonwalkConn then
+        moonwalkConn:Disconnect()
+        moonwalkConn = nil
+    end
+
+    if not States.Moonwalk then
+        clearMoonwalkAutoRotate()
+        return
+    end
+
+    moonwalkConn = RunService.RenderStepped:Connect(function()
+        if not States.Moonwalk then
+            if moonwalkConn then
+                moonwalkConn:Disconnect()
+                moonwalkConn = nil
+            end
+            clearMoonwalkAutoRotate()
+            return
+        end
+
+        local char = getChar()
+        if not char then return end
+
+        local hum = char:FindFirstChildWhichIsA("Humanoid")
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local cam = Workspace.CurrentCamera
+        if not hum or not hrp or not cam or hum.Health <= 0 then return end
+
+        setMoonwalkHumanoid(hum)
+
+        local look = cam.CFrame.LookVector
+        local flatLook = Vector3.new(look.X, 0, look.Z)
+        if flatLook.Magnitude < 0.05 then return end
+
+        local reverseLook = -flatLook.Unit
+        local pos = hrp.Position
+
+        pcall(function()
+            hrp.CFrame = CFrame.lookAt(pos, pos + reverseLook)
+        end)
+    end)
+end
+
+local function toggleMoonwalk(e)
+    States.Moonwalk = e and true or false
+    applyMoonwalk()
+end
+
+pcall(function()
+    _G.__NevoirsLastMoonwalkCleanup = function()
+        if moonwalkConn then
+            moonwalkConn:Disconnect()
+            moonwalkConn = nil
+        end
+        States.Moonwalk = false
+        clearMoonwalkAutoRotate()
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- LOGIC: INFINITE JUMP
+-- ══════════════════════════════════════════════════════════════════════════════
+local ijConn
+local function toggleInfiniteJump(e)
+    States.InfiniteJump = e
+    if ijConn then ijConn:Disconnect(); ijConn = nil end
+    if not e then return end
+    ijConn = UserInputService.JumpRequest:Connect(function()
+        local char = getChar()
+        if not char then return end
+        local hum = char:FindFirstChildWhichIsA("Humanoid")
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- LOGIC: FULLBRIGHT
+-- ══════════════════════════════════════════════════════════════════════════════
+local fbConn
+local function applyFullbright()
+    if fbConn then fbConn:Disconnect(); fbConn = nil end
+    if not States.Fullbright then return end
+    fbConn = RunService.Heartbeat:Connect(function()
+        Lighting.Brightness     = 2
+        Lighting.GlobalShadows  = false
+        Lighting.OutdoorAmbient = Color3.new(1,1,1)
+        Lighting.Ambient        = Color3.new(1,1,1)
+        Lighting.FogEnd         = 100000
+    end)
+end
+local function toggleFullbright(e)
+    States.Fullbright = e
+    if e then applyFullbright()
+    else
+        if fbConn then fbConn:Disconnect(); fbConn = nil end
+        Lighting.Brightness     = OrigLighting.Brightness
+        Lighting.GlobalShadows  = OrigLighting.GlobalShadows
+        Lighting.OutdoorAmbient = OrigLighting.OutdoorAmbient
+        Lighting.Ambient        = OrigLighting.Ambient
+        Lighting.FogEnd         = OrigLighting.FogEnd
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- LOGIC: VFLY TỰ DO (camera-direction, không cần nút lên/xuống)
+-- ══════════════════════════════════════════════════════════════════════════════
+local Camera = workspace.CurrentCamera
+local vflyBV, vflyBG, vflyConn, vflyStateConn
+local vflyHumanoid, vflyOldWalkSpeed = nil, nil
+local VFlySpeed = getNumberSetting("VFlySpeed", DEFAULT_SETTINGS.VFlySpeed, 0, 99999)
+
+local function cleanVFly()
+    if vflyConn      then vflyConn:Disconnect();      vflyConn      = nil end
+    if vflyStateConn then vflyStateConn:Disconnect(); vflyStateConn = nil end
+    pcall(function() if vflyBV and vflyBV.Parent then vflyBV:Destroy() end end)
+    pcall(function() if vflyBG and vflyBG.Parent then vflyBG:Destroy() end end)
+    vflyBV = nil; vflyBG = nil
+end
+
+local function applyVFly()
+    cleanVFly()
+    if not States.VFly then return end
+    local char = getChar()
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildWhichIsA("Humanoid")
+    if not hrp or not hum then return end
+
+    vflyBG = Instance.new("BodyGyro")
+    vflyBG.MaxTorque = Vector3.new(9e9,9e9,9e9)
+    vflyBG.P = 9e4; vflyBG.D = 1e3
+    vflyBG.CFrame = hrp.CFrame; vflyBG.Parent = hrp
+
+    vflyBV = Instance.new("BodyVelocity")
+    vflyBV.MaxForce = Vector3.new(9e9,9e9,9e9)
+    vflyBV.Velocity = Vector3.zero; vflyBV.P = 1e4; vflyBV.Parent = hrp
+
+    vflyHumanoid = hum
+    vflyOldWalkSpeed = hum.WalkSpeed
+    hum.WalkSpeed = 0
+    hum:ChangeState(Enum.HumanoidStateType.Physics)
+
+    vflyStateConn = hum.StateChanged:Connect(function(_, new)
+        if States.VFly and new ~= Enum.HumanoidStateType.Physics then
+            task.defer(function()
+                if States.VFly then hum:ChangeState(Enum.HumanoidStateType.Physics) end
+            end)
+        end
+    end)
+
+    vflyConn = RunService.RenderStepped:Connect(function()
+        if not States.VFly then cleanVFly(); return end
+        if not vflyBV or not vflyBV.Parent then cleanVFly(); applyVFly(); return end
+
+        Camera = workspace.CurrentCamera or Camera
+        local camCF = Camera.CFrame
+        local look  = camCF.LookVector
+        local right = camCF.RightVector
+        local flatL = Vector3.new(look.X, 0, look.Z)
+        local flatR = Vector3.new(right.X, 0, right.Z)
+        if flatL.Magnitude > 0 then flatL = flatL.Unit end
+        if flatR.Magnitude > 0 then flatR = flatR.Unit end
+
+        local move = Vector3.zero
+        local md = hum.MoveDirection
+        if md.Magnitude > 0.16 and flatL.Magnitude > 0 and flatR.Magnitude > 0 then
+            -- Mobile joystick: lấy hướng input ngang rồi chiếu lại theo hướng camera đầy đủ.
+            -- Nhìn lên trời + kéo tới = bay lên; nhìn xuống + kéo tới = bay xuống.
+            local forward = math.clamp(md:Dot(flatL), -1, 1)
+            local strafe  = math.clamp(md:Dot(flatR), -1, 1)
+            if math.abs(forward) < 0.18 then forward = 0 end
+            if math.abs(strafe) < 0.18 then strafe = 0 end
+            if forward ~= 0 or strafe ~= 0 then
+                move = move + (look * forward) + (right * strafe)
+            end
+        else
+            -- PC fallback: vẫn dùng WASD, nhưng W/S đi theo LookVector 3D của camera.
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + look end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - look end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - right end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + right end
+        end
+
+        -- Phím phụ cho PC; mobile không cần nút riêng.
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) or UserInputService:IsKeyDown(Enum.KeyCode.E) then
+            move = move + Vector3.new(0,1,0)
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.Q) then
+            move = move - Vector3.new(0,1,0)
+        end
+
+        if move.Magnitude > 0.08 then
+            vflyBV.Velocity = move.Unit * VFlySpeed
+            if look.Magnitude > 0 then
+                vflyBG.CFrame = CFrame.new(hrp.Position, hrp.Position + look)
+            end
+        else
+            -- Không còn trượt/giật khi đứng im: giữ vị trí, không decay vận tốc cũ.
+            vflyBV.Velocity = Vector3.zero
+            vflyBG.CFrame = hrp.CFrame
+        end
+    end)
+end
+
+local function toggleVFly(e)
+    States.VFly = e
+    if e then applyVFly()
+    else
+        cleanVFly()
+        local hum = vflyHumanoid
+        if hum and hum.Parent then
+            pcall(function()
+                if vflyOldWalkSpeed ~= nil then hum.WalkSpeed = vflyOldWalkSpeed end
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+            end)
+        end
+        vflyHumanoid = nil
+        vflyOldWalkSpeed = nil
+    end
+end
+States.VFly = false  -- khai báo sau vì toggleVFly dùng
+
+-- ── Respawn ───────────────────────────────────────────────────────────────────
+local characterAddedConn
+characterAddedConn = LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.7)
+    if States.TPWalk       then applyTPWalk()            end
+    if States.Noclip       then applyNoclip()            end
+    if States.InfiniteJump then toggleInfiniteJump(true) end
+    if States.Fullbright   then applyFullbright()        end
+    if States.VFly         then applyVFly()              end
+    if States.ESPPlayer    then setPlayerESP(true)       end
+    if States.ESPMonster   then setMonsterESP(true)      end
+    if States.ESPTaskBody      then setTaskBodyESP(true)      end
+    if States.ESPTaskSpider    then setTaskSpiderESP(true)    end
+    if States.ESPTaskGenerator then setTaskGeneratorESP(true) end
+    if States.ESPTaskTerminal  then setTaskTerminalESP(true)  end
+    if States.ESPTaskValve     then setTaskValveESP(true)     end
+    if States.ESPTaskWire      then setTaskWireESP(true)      end
+    if States.ESPTaskDirector  then setTaskDirectorESP(true)  end
+    if States.AutoYenESP       then setYenESP(true)            end
+    if States.AutoYenCollect   then startYenSupportLoop()      end
+    if States.InstantInteract then InstantInteract:scan()      end
+    if States.BossRadar        then updateBossRadar()           end
+end)
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- AUTO ACTIONS
+-- Bản này giữ UI/Fly gốc, chỉ sửa Auto: không TP, chỉ xử lý object gần nhất
+-- và dùng flow gần nhất với script 229. Không dùng chỉnh cự li client-side.
+-- ══════════════════════════════════════════════════════════════════════════════
+-- WindUI is shared from the service declarations above.
+
+local function packetHasServerCall(packet)
+    if not packet then return false end
+    if typeof(packet) == "Instance" then
+        return packet:IsA("RemoteEvent") or packet:IsA("RemoteFunction")
+    end
+    return type(packet) == "table" and (type(packet.FireServer) == "function" or type(packet.InvokeServer) == "function")
+end
+
+local function safeRequirePacket(module)
+    if not module or not module:IsA("ModuleScript") then return nil end
+    local ok, result = pcall(require, module)
+    if ok then return result end
+    return nil
+end
+
+local function getReliablePacket()
+    -- Giữ path gốc: ReplicatedStorage.modules.Packet.Reliable, thêm fallback require để tránh miss Packet module.
+    local modules = ReplicatedStorage:FindFirstChild("modules")
+    local packet = modules and modules:FindFirstChild("Packet")
+
+    if packet then
+        local directReliable = packet:FindFirstChild("Reliable")
+        if packetHasServerCall(directReliable) then
+            return directReliable
+        end
+
+        local requiredPacket = safeRequirePacket(packet)
+        if type(requiredPacket) == "table" and packetHasServerCall(requiredPacket.Reliable) then
+            return requiredPacket.Reliable
+        end
+
+        for _, obj in ipairs(packet:GetDescendants()) do
+            if obj.Name == "Reliable" and packetHasServerCall(obj) then
+                return obj
+            end
+        end
+    end
+
+    -- Fallback từ bản cũ nếu executor/game đã có biến R global ở ngoài.
+    local ok, reliable = pcall(function()
+        return R.modules.Packet.Reliable
+    end)
+    if ok and packetHasServerCall(reliable) then return reliable end
+
+    return nil
+end
+
+
+local function getDistance(part)
+    local hrp = getHRP(getChar())
+    if not hrp or not part then return math.huge end
+    return (part.Position - hrp.Position).Magnitude
+end
+
+local function isNearEnough(part)
+    -- Đã bỏ mục cự li: chỉ cần object tồn tại; việc prompt có fire được hay không để game/executor xử lý.
+    return part ~= nil
+end
+
+local function promptAnchor(prompt)
+    if not prompt then return nil end
+    local p = prompt.Parent
+    if p and p:IsA("BasePart") then return p end
+    if p and p:IsA("Attachment") and p.Parent and p.Parent:IsA("BasePart") then return p.Parent end
+    return rootOf(p)
+end
+
+local function preparePromptForAuto(prompt, extraRange)
+    if not prompt then return end
+
+    -- Đã loại bỏ toàn bộ chỉnh cự li. Không sửa MaxActivationDistance/RequiresLineOfSight
+    -- để tránh tình trạng UI/task hoạt động khác logic gốc. Chỉ rút HoldDuration cho thao tác nhanh hơn.
+    pcall(function() prompt.HoldDuration = 0 end)
+end
+
+local function pressPrompt(prompt, holdTime)
+    if not prompt then return false end
+
+    preparePromptForAuto(prompt)
+
+    local ok = false
+    local duration = tonumber(holdTime) or 1
+
+    ok = pcall(function()
+        fireproximityprompt(prompt, duration, true)
+    end) or ok
+
+    ok = pcall(function()
+        fireproximityprompt(prompt, duration)
+    end) or ok
+
+    ok = pcall(function()
+        fireproximityprompt(prompt)
+    end) or ok
+
+    return ok
+end
+
+local function pressPromptOriginalOnce(prompt)
+    if not prompt then return false end
+    preparePromptForAuto(prompt)
+
+    -- Dành riêng cho Generator: script mẫu chỉ gọi fireproximityprompt(prompt) đúng 1 lần.
+    -- Không dùng chuỗi fallback nhiều kiểu ở đây để tránh tạo nhiều task UI chồng lên nhau.
+    local ok = pcall(function()
+        fireproximityprompt(prompt)
+    end)
+
+    if not ok then
+        ok = pcall(function()
+            fireproximityprompt(prompt, 1, true)
+        end)
+    end
+
+    return ok
+end
+
+-- Task UI ownership is captured around this interaction only. Never scan-and-hide
+-- every matching GUI: completed generator rounds must be confirmed first.
+local TaskAssist = { busy = nil, epoch = 0, hidden = {} }
+
+function TaskAssist.notify(title, message)
+    print("[Nevoirs] " .. title .. ": " .. message)
+    if WindUI and WindUI.Notify then
+        pcall(function()
+            WindUI:Notify({Title = title, Content = message, Duration = 4, Icon = "info"})
+        end)
+    end
+end
+
+function TaskAssist.uiMatches(gui, kind)
+    if not (gui:IsA("ScreenGui") or gui:IsA("GuiObject")) then return false end
+    if gui == ScreenGui or gui:IsDescendantOf(ScreenGui) then return false end
+    -- Match an actual minigame container name, never arbitrary labels/text.
+    local name = gui.Name:lower():gsub("[^%w]", "")
+    local base = kind == "Generator" and {"circuit", "generator"} or {"shape", "terminal", "shapeterminal"}
+    for _, prefix in ipairs(base) do
+        if name == prefix or name == prefix .. "ui" or name == prefix .. "gui"
+            or name == prefix .. "game" or name == prefix .. "minigame"
+            or name == prefix .. "frame" then
+            return true
+        end
+    end
+    return false
+end
+
+function TaskAssist.visible(gui)
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local item = gui
+    while item and item ~= pg do
+        if item:IsA("ScreenGui") and not item.Enabled then return false end
+        if item:IsA("GuiObject") and not item.Visible then return false end
+        item = item.Parent
+    end
+    return item == pg
+end
+
+function TaskAssist.restore(kind)
+    local restored = {}
+    for gui, record in pairs(TaskAssist.hidden) do
+        if not kind or record.kind == kind then
+            if gui.Parent then
+                pcall(function()
+                    if gui:IsA("ScreenGui") then
+                        if gui.Enabled == false then gui.Enabled = record.value end
+                    elseif gui.Visible == false then
+                        gui.Visible = record.value
+                    end
+                end)
+                restored[gui] = true
+            end
+            TaskAssist.hidden[gui] = nil
+        end
+    end
+    return restored
+end
+
+function TaskAssist.begin(kind, target)
+    if TaskAssist.busy then
+        TaskAssist.notify(kind, "Đang xử lý " .. TaskAssist.busy.kind .. "; đợi lượt hiện tại kết thúc.")
+        return nil
+    end
+    local restored = TaskAssist.restore(kind)
+    local session = {
+        kind = kind, target = target, character = getChar(), epoch = TaskAssist.epoch,
+        before = {}, owned = {}, triggered = false, connection = nil,
+    }
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        for _, gui in ipairs(pg:GetDescendants()) do
+            if TaskAssist.uiMatches(gui, kind) then
+                -- A previously captured container is safe to reuse for this next session.
+                session.before[gui] = not restored[gui] and TaskAssist.visible(gui) or false
+            end
+        end
+    end
+    TaskAssist.busy = session
+    return session
+end
+
+function TaskAssist.valid(session)
+    if session.epoch ~= TaskAssist.epoch or not ScreenGui.Parent then return false end
+    if getChar() ~= session.character or not session.character or not session.character.Parent then return false end
+    local hum = session.character:FindFirstChildOfClass("Humanoid")
+    return (not hum or hum.Health > 0) and session.target.Parent ~= nil
+        and session.target:IsDescendantOf(Workspace)
+end
+
+function TaskAssist.capture(session)
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local found = false
+    if pg then
+        for _, gui in ipairs(pg:GetDescendants()) do
+            if TaskAssist.uiMatches(gui, session.kind) and TaskAssist.visible(gui) then
+                found = true
+                if session.before[gui] ~= true then session.owned[gui] = true end
+            end
+        end
+    end
+    return found
+end
+
+function TaskAssist.watchPrompt(session, prompt)
+    session.connection = prompt.Triggered:Connect(function(player)
+        if not player or player == LocalPlayer then session.triggered = true end
+    end)
+end
+
+function TaskAssist.finish(session)
+    if session.connection then session.connection:Disconnect(); session.connection = nil end
+    if TaskAssist.busy == session then TaskAssist.busy = nil end
+end
+
+function TaskAssist.closeOwned(session)
+    local count = 0
+    TaskAssist.capture(session)
+    for gui in pairs(session.owned) do
+        if gui.Parent and TaskAssist.visible(gui) then
+            -- Prefer the smallest captured task container; do not hide its parent too.
+            local hasOwnedChild = false
+            for other in pairs(session.owned) do
+                if other ~= gui and other.Parent and other:IsDescendantOf(gui) then
+                    hasOwnedChild = true
+                    break
+                end
+            end
+            if not hasOwnedChild then
+                local ok = pcall(function()
+                    local value = gui:IsA("ScreenGui") and gui.Enabled or gui.Visible
+                    TaskAssist.hidden[gui] = {kind = session.kind, value = value}
+                    if gui:IsA("ScreenGui") then gui.Enabled = false else gui.Visible = false end
+                end)
+                if ok then count = count + 1 end
+            end
+        end
+    end
+    return count
+end
+
+function TaskAssist.cancel()
+    TaskAssist.epoch = TaskAssist.epoch + 1
+    if TaskAssist.busy then TaskAssist.finish(TaskAssist.busy) end
+    TaskAssist.restore()
+end
+
+local function nearestFrom(list, getPart, filter)
+    local nearest, nearestPart, best = nil, nil, math.huge
+    for _, item in ipairs(list) do
+        if (not filter or filter(item)) then
+            local part = getPart(item)
+            if part and validPart(part) then
+                local d = getDistance(part)
+                if d < best then
+                    nearest, nearestPart, best = item, part, d
+                end
+            end
+        end
+    end
+    return nearest, nearestPart, best
+end
+
+local GeneratorAutoRunning = false
+
+local function collectCircuitPillars(folder)
+    local list = {}
+    if not folder then return list end
+
+    -- Script gốc đặt CircuitPillar trực tiếp trong Circuits; dùng GetDescendants làm fallback để không miss khi map đổi folder con.
+    for _, obj in ipairs(folder:GetChildren()) do
+        if obj.Name == "CircuitPillar" then
+            table.insert(list, obj)
+        end
+    end
+
+    if #list == 0 then
+        for _, obj in ipairs(folder:GetDescendants()) do
+            if obj.Name == "CircuitPillar" then
+                table.insert(list, obj)
+            end
+        end
+    end
+
+    return list
+end
+
+local function getGeneratorPromptPart(pillar)
+    if not pillar then return nil end
+    -- Generator gốc dùng CollisionPart làm điểm thao tác, nên ưu tiên nó để chọn đúng máy phát gần nhất.
+    return pillar:FindFirstChild("CollisionPart")
+        or pillar:FindFirstChild("PromptPart")
+        or rootOf(pillar)
+end
+
+local function getGeneratorPrompt(pillar)
+    local pp = pillar and pillar:FindFirstChild("PromptPart")
+    if pp then
+        local prompt = pp:FindFirstChildWhichIsA("ProximityPrompt")
+        if prompt then return prompt end
+    end
+
+    if pillar then
+        for _, d in ipairs(pillar:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                return d
+            end
+        end
+    end
+
+    return nil
+end
+
+local function nearestGenerator(folder)
+    local best, bestPart, bestDist = nil, nil, math.huge
+    local fallback, fallbackPart, fallbackDist = nil, nil, math.huge
+
+    for _, pillar in ipairs(collectCircuitPillars(folder)) do
+        local part = getGeneratorPromptPart(pillar)
+        if part and validPart(part) then
+            local dist = getDistance(part)
+            if dist < fallbackDist then
+                fallback, fallbackPart, fallbackDist = pillar, part, dist
+            end
+
+            local prompt = getGeneratorPrompt(pillar)
+            if prompt and prompt.Enabled ~= false and dist < bestDist then
+                best, bestPart, bestDist = pillar, part, dist
+            end
+        end
+    end
+
+    -- Ưu tiên prompt enabled như script gốc, nhưng vẫn fallback direct remote nếu prompt bị ẩn.
+    if best then return best, bestPart, bestDist end
+    return fallback, fallbackPart, fallbackDist
+end
+
+local function fireReliablePacket(reliable, key, target)
+    if not reliable then return false end
+
+    if typeof(reliable) == "Instance" then
+        if reliable:IsA("RemoteEvent") then
+            reliable:FireServer(key, target)
+            return true
+        elseif reliable:IsA("RemoteFunction") then
+            reliable:InvokeServer(key, target)
+            return true
+        end
+    elseif type(reliable) == "table" then
+        if type(reliable.FireServer) == "function" then
+            reliable:FireServer(key, target)
+            return true
+        elseif type(reliable.InvokeServer) == "function" then
+            reliable:InvokeServer(key, target)
+            return true
+        end
+    else
+        local ok = pcall(function()
+            reliable:FireServer(key, target)
+        end)
+        return ok
+    end
+
+    return false
+end
+
+local function autoGenerator()
+    if GeneratorAutoRunning then
+        return TaskAssist.notify("Generator", "Máy phát đang được xử lý; đợi hoàn tất rồi bấm lại.")
+    end
+    if TaskAssist.busy then
+        return TaskAssist.notify("Generator", "Đang có phiên nhiệm vụ khác; đợi phiên đó kết thúc.")
+    end
+
+    GeneratorAutoRunning = true
+    task.spawn(function()
+        local session
+        local okRun, errRun = pcall(function()
+            local folder = safeFolder({"Section3","OBJECTIVE","Circuits"})
+            if not folder then return TaskAssist.notify("Generator", "Chưa tìm thấy máy phát ở khu hiện tại.") end
+            local pillar, anchor, dist = nearestGenerator(folder)
+            if not pillar or not anchor then return TaskAssist.notify("Generator", "Không tìm thấy máy phát.") end
+            local reliable = getReliablePacket()
+            if not reliable then return TaskAssist.notify("Generator", "Chưa tải được Packet Reliable.") end
+            session = TaskAssist.begin("Generator", pillar)
+            if not session then return end
+            local collisionPart = pillar:FindFirstChild("CollisionPart")
+            local prompt = getGeneratorPrompt(pillar)
+
+            -- Preserve the uploaded cc's working generator flow and timing.
+            pcall(function()
+                if collisionPart and collisionPart:IsA("BasePart") then collisionPart.CanCollide = false end
+            end)
+            if prompt then
+                TaskAssist.watchPrompt(session, prompt)
+                preparePromptForAuto(prompt)
+                pressPromptOriginalOnce(prompt)
+            else
+                warn("[Nevoirs] Không tìm thấy prompt máy phát; giữ fallback packet gốc.")
+            end
+            task.wait(1)
+            if not TaskAssist.valid(session) then return end
+            TaskAssist.capture(session)
+            local sent = 0
+            for _ = 1, 3 do
+                if not TaskAssist.valid(session) then break end
+                -- Source 229 exposes this exact completion state for CircuitPillar.
+                if pillar:GetAttribute("CurrentRound") == 4 then break end
+                local okFire, acceptedCall = pcall(fireReliablePacket, reliable, "Section3/CircuitRoundComplete", pillar)
+                if okFire and acceptedCall then sent = sent + 1 end
+            end
+
+            local deadline = os.clock() + 2
+            while TaskAssist.valid(session) and pillar:GetAttribute("CurrentRound") ~= 4 and os.clock() < deadline do
+                TaskAssist.capture(session)
+                task.wait(0.05)
+            end
+            if not TaskAssist.valid(session) then return end
+            if pillar:GetAttribute("CurrentRound") == 4 then
+                local closed = TaskAssist.closeOwned(session)
+                TaskAssist.notify("Generator", closed > 0
+                    and "Đã xác nhận đủ vòng và ẩn đúng bảng máy phát của lượt này."
+                    or "Máy phát đã đủ vòng; chưa nhận diện được bảng an toàn, hãy đóng bảng thủ công.")
+            else
+                TaskAssist.notify("Generator", ("Đã gửi %d lượt; chưa xác nhận máy hoàn tất. Hãy kiểm tra bảng và đứng sát máy."):format(sent))
+            end
+            print(("[Nevoirs] Generator: %d packet | %.1f studs | CurrentRound=%s"):format(sent, dist or 0, tostring(pillar:GetAttribute("CurrentRound"))))
+        end)
+        if session then TaskAssist.finish(session) end
+        GeneratorAutoRunning = false
+        if not okRun then TaskAssist.notify("Generator", "Lỗi xử lý: " .. tostring(errRun)) end
+    end)
+end
+
+local function autoTerminal()
+    if TaskAssist.busy then
+        return TaskAssist.notify("Terminal", "Đang có phiên nhiệm vụ khác; đợi phiên đó kết thúc.")
+    end
+    local folder = safeFolder({"Section4","Lab","CleanseRoomObjective","ShapeTerminals"})
+    if not folder then return TaskAssist.notify("Terminal", "Chưa thấy terminal. Kiểm tra cổng và tiến trình khu Lab.") end
+    local terminal, pp, distance = nearestFrom(folder:GetChildren(), function(v)
+        return v:FindFirstChild("PromptPart") or rootOf(v)
+    end, function(v)
+        if not v.Name:lower():find("terminal", 1, true) then return false end
+        local part = v:FindFirstChild("PromptPart") or rootOf(v)
+        local prompt = part and part:FindFirstChildWhichIsA("ProximityPrompt")
+        local anchor = promptAnchor(prompt)
+        return prompt and prompt.Enabled and anchor and getDistance(anchor) <= prompt.MaxActivationDistance + 0.5
+    end)
+    if not terminal or not pp then
+        return TaskAssist.notify("Terminal", "Không có terminal đang mở tương tác trong tầm. Hãy đứng sát máy chưa hoàn tất.")
+    end
+    local prompt = pp:FindFirstChildWhichIsA("ProximityPrompt")
+    local reliable = getReliablePacket()
+    if not reliable then return TaskAssist.notify("Terminal", "Chưa tải được Packet Reliable.") end
+    local session = TaskAssist.begin("Terminal", terminal)
+    if not session then return end
+    task.spawn(function()
+        local opened = false
+        local released = false
+        local okRun, errRun = pcall(function()
+            TaskAssist.watchPrompt(session, prompt)
+            local invoked = pressPromptOriginalOnce(prompt)
+            if not invoked then return TaskAssist.notify("Terminal", "Executor chưa gọi được tương tác terminal.") end
+            opened = session.triggered
+            task.wait(0.35)
+            local deadline = os.clock() + 1
+            local visibleUI = TaskAssist.capture(session)
+            while TaskAssist.valid(session) and not session.triggered and not visibleUI and os.clock() < deadline do
+                task.wait(0.05)
+                visibleUI = TaskAssist.capture(session)
+            end
+            if not TaskAssist.valid(session) then return end
+            -- A successful function call alone is not proof that the minigame opened.
+            opened = session.triggered or visibleUI
+            if not opened then
+                return TaskAssist.notify("Terminal", "Đã thử mở nhưng chưa xác nhận được phiên. Mở tương tác thủ công rồi thử lại.")
+            end
+            local completedBefore = {}
+            for _, key in ipairs({"Completed", "Complete", "Solved", "IsCompleted", "Finished"}) do
+                completedBefore[key] = terminal:GetAttribute(key)
+            end
+            local roundBefore = terminal:GetAttribute("CurrentRound")
+            -- Match current 229: one RoundComplete followed by Release, no teleport.
+            local okSend, sent = pcall(fireReliablePacket, reliable, "ShapeTerminal/RoundComplete", terminal)
+            local okRelease, didRelease = pcall(fireReliablePacket, reliable, "ShapeTerminal/Release", terminal)
+            released = okRelease and didRelease
+            if not okSend or not sent then return TaskAssist.notify("Terminal", "Không gửi được lượt xử lý terminal.") end
+            local confirmed, progressed = false, false
+            deadline = os.clock() + 1.5
+            repeat
+                if not TaskAssist.valid(session) then return end
+                for _, key in ipairs({"Completed", "Complete", "Solved", "IsCompleted", "Finished"}) do
+                    if terminal:GetAttribute(key) == true and completedBefore[key] ~= true then confirmed = true end
+                end
+                local round = terminal:GetAttribute("CurrentRound")
+                progressed = type(round) == "number" and type(roundBefore) == "number" and round > roundBefore
+                if confirmed or progressed then break end
+                task.wait(0.05)
+            until os.clock() >= deadline
+            if confirmed then
+                TaskAssist.notify("Terminal", "Đã thấy trạng thái hoàn tất của terminal.")
+            elseif progressed then
+                TaskAssist.notify("Terminal", "Terminal đã tăng tiến độ. Kiểm tra vòng còn lại trước khi bấm tiếp.")
+            else
+                TaskAssist.notify("Terminal", ("Đã gửi 1 lượt + %s ở %.1f studs; chưa có xác nhận hoàn tất. Kiểm tra mục tiêu trong game."):format(released and "nhả máy" or "chưa nhả được máy", distance or 0))
+            end
+        end)
+        -- Release on interruption/error too, without ever forcing any GUI hidden.
+        if (opened or session.triggered) and not released and terminal.Parent then
+            pcall(fireReliablePacket, reliable, "ShapeTerminal/Release", terminal)
+        end
+        TaskAssist.finish(session)
+        if not okRun then TaskAssist.notify("Terminal", "Lỗi xử lý: " .. tostring(errRun)) end
+    end)
+end
+
+local function getValveIcon(valve)
+    if not valve then return nil end
+    local notif = valve:FindFirstChild("Notification") or valve:FindFirstChild("Notification", true)
+    return notif and (notif:FindFirstChild("Icon") or notif:FindFirstChild("Icon", true))
+end
+
+local function valveIconEnabled(valve)
+    local foundIcon = false
+    for _, d in ipairs(valve:GetDescendants()) do
+        if d.Name == "Icon" and d:IsA("BillboardGui") then
+            foundIcon = true
+            if d.Enabled then return true end
+        elseif d.Name == "Icon" and d:IsA("GuiObject") then
+            foundIcon = true
+            if d.Visible then return true end
+        end
+    end
+
+    if not foundIcon then
+        for _, d in ipairs(valve:GetDescendants()) do
+            if d:IsA("ProximityPrompt") and d.Enabled then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+local function valveHasTurnerPrompt(valve)
+    for _, d in ipairs(valve:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then
+            local n = string.lower(d.Name)
+            local pn = d.Parent and string.lower(d.Parent.Name) or ""
+            if n == "right" or pn == "right" or d:FindFirstAncestor("Turners") then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function getValvePrompts(valve)
+    local prompts = {}
+    for _, d in ipairs(valve:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then
+            local n = string.lower(d.Name)
+            local pn = d.Parent and string.lower(d.Parent.Name) or ""
+            local inTurners = d:FindFirstAncestor("Turners") ~= nil
+            if n == "right" or pn == "right" or inTurners then
+                table.insert(prompts, d)
+            end
+        end
+    end
+    table.sort(prompts, function(a, b)
+        local aa = promptAnchor(a)
+        local bb = promptAnchor(b)
+        return getDistance(aa) < getDistance(bb)
+    end)
+    return prompts
+end
+
+local function pressValvePrompt(prompt)
+    if not prompt then return false end
+    local ok = false
+    preparePromptForAuto(prompt, 18)
+    ok = pcall(function()
+        local hold = tonumber(prompt.HoldDuration) or 0
+        fireproximityprompt(prompt, math.max(hold + 0.05, 1), true)
+    end) or ok
+    ok = pcall(function() fireproximityprompt(prompt, 1, true) end) or ok
+    ok = pcall(function() fireproximityprompt(prompt, 1) end) or ok
+    ok = pcall(function() fireproximityprompt(prompt) end) or ok
+    return ok
+end
+
+local function autoValve()
+    local folder = safeFolder({"Section4","Lab","CleanseRoomObjective","Valves"})
+    if not folder then return warn("[Nevoirs] Không tìm thấy thư mục van") end
+
+    local valve, anchor = nearestFrom(folder:GetChildren(), function(v)
+        if not v:IsA("Model") then return nil end
+        local icon = getValveIcon(v)
+        if icon and icon.Parent and icon.Parent:IsA("BasePart") then return icon.Parent end
+        local prompt = getValvePrompts(v)[1]
+        return promptAnchor(prompt) or rootOf(v)
+    end, function(v)
+        return v:IsA("Model") and valveHasTurnerPrompt(v) and valveIconEnabled(v)
+    end)
+
+    if not valve or not anchor then return warn("[Nevoirs] Không tìm thấy van") end
+
+    local started = os.clock()
+    local prompts = getValvePrompts(valve)
+
+    if #prompts == 0 then
+        return warn("[Nevoirs] Van gần nhất không có prompt xoay")
+    end
+
+    while os.clock() - started < 35 do
+        if not valveIconEnabled(valve) then
+            break
+        end
+
+        for _, prompt in ipairs(prompts) do
+            if prompt and prompt.Parent then
+                pressValvePrompt(prompt)
+                task.wait(0.12)
+            end
+        end
+
+        prompts = getValvePrompts(valve)
+        task.wait(0.08)
+    end
+end
+
+local function autoWire()
+    local folder = safeFolder({"Section5","MainObjective","Boxes"})
+    if not folder then return warn("[Nevoirs] Không tìm thấy thư mục hộp dây") end
+
+    local box, pp = nearestFrom(folder:GetChildren(), function(v)
+        if v.Name ~= "WireBox" then return nil end
+        return v:FindFirstChild("PromptPart") or rootOf(v)
+    end, function(v)
+        if v.Name ~= "WireBox" then return false end
+        local part = v:FindFirstChild("PromptPart")
+        local prompt = part and part:FindFirstChildWhichIsA("ProximityPrompt")
+        return prompt ~= nil and prompt.Enabled ~= false
+    end)
+
+    if not box or not pp then return warn("[Nevoirs] Không tìm thấy hộp dây") end
+
+    local reliable = getReliablePacket()
+    if not reliable then return warn("[Nevoirs] Không tìm thấy Packet Reliable") end
+    -- Sát script gốc: không mở UI hộp dây, claim 2 lần rồi gửi screw/cut/complete.
+    pcall(function() reliable:FireServer("Section5/WireBoxClaim", box) end)
+    task.wait(0.03)
+    pcall(function() reliable:FireServer("Section5/WireBoxClaim", box) end)
+    task.wait(0.03)
+
+    local bolt = box:FindFirstChild("Bolt")
+    if bolt then
+        for _, screw in ipairs(bolt:GetChildren()) do
+            if screw.Name == "Screw" then
+                pcall(function() reliable:FireServer("Section5/WireBoxScrewDone", screw) end)
+                task.wait(0.015)
+            end
+        end
+    end
+
+    local cuttable = box:FindFirstChild("Cuttable")
+    if cuttable then
+        for _, cut in ipairs(cuttable:GetChildren()) do
+            if cut.Name == "Cut" then
+                pcall(function() reliable:FireServer("Section5/WireBoxCutDone", cut) end)
+                task.wait(0.015)
+            end
+        end
+    end
+
+    pcall(function() reliable:FireServer("Section5/WireBoxComplete", box) end)
+    pcall(function()
+        local prompt = box.PromptPart and box.PromptPart:FindFirstChildWhichIsA("ProximityPrompt")
+        if prompt then prompt.Enabled = false end
+    end)
+end
+
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- AUTO NEARBY KILL: GATAS / GRUNTS / MUKI / HOGOGUNTAI / FLESHBLOCK / SPIDER, KHÔNG TELEPORT
+-- Bám logic B3C1 gốc: GunAction("fire") + RemoteEvent target + CAMERAREPLICA.
+-- Bản này sửa lại target-acquire: không phụ thuộc 1 remote cố định, tự refresh remote/part
+-- để tránh lỗi "lúc đầu shoot, những lần sau báo không có target".
+-- ══════════════════════════════════════════════════════════════════════════════
+-- WindUI is forward-declared before task actions; do not shadow it here.
+local AutoNearbyKillRunning = false
+local AutoNearbyKillTarget = nil
+local CameraReplicaHookInstalled = false
+local CameraReplicaLastTry = 0
+
+local AUTO_KILL_ICON = NEVOIRS_UI_ICON
+local TARGET_RELOCK_INTERVAL = 1.35
+
+local AutoKillConfig = {
+    FireDelay = getNumberSetting("AutoKillFireDelay", DEFAULT_SETTINGS.AutoKillFireDelay, 0.01, 10),
+    RangeGata = getNumberSetting("AutoKillRangeGata", DEFAULT_SETTINGS.AutoKillRangeGata, 0, 9999),
+    RangeGrunt = getNumberSetting("AutoKillRangeGrunt", DEFAULT_SETTINGS.AutoKillRangeGata, 0, 9999),
+    RangeMuki = getNumberSetting("AutoKillRangeMuki", DEFAULT_SETTINGS.AutoKillRangeGata, 0, 9999),
+    RangeHogo = getNumberSetting("AutoKillRangeHogo", DEFAULT_SETTINGS.AutoKillRangeHogo, 0, 9999),
+    RangeFleshBlock = getNumberSetting("AutoKillRangeFleshBlock", DEFAULT_SETTINGS.AutoKillRangeFleshBlock, 0, 9999),
+    RangeSpider = getNumberSetting("AutoKillRangeSpider", DEFAULT_SETTINGS.AutoKillRangeSpider, 0, 9999),
+}
+
+local function normalizeKillKind(kind)
+    local k = tostring(kind or ""):lower()
+    if k:find("spider", 1, true) then return "Spider" end
+    if k:find("flesh", 1, true) or k:find("block", 1, true) then return "FleshBlock" end
+    if k:find("hogo", 1, true) then return "Hogo" end
+    if k:find("muki", 1, true) then return "Muki" end
+    if k:find("grunt", 1, true) then return "Grunt" end
+    return "Gata"
+end
+
+local function getKillRange(kind)
+    local k = normalizeKillKind(kind)
+    if k == "Spider" then return AutoKillConfig.RangeSpider end
+    if k == "FleshBlock" then return AutoKillConfig.RangeFleshBlock end
+    if k == "Hogo" then return AutoKillConfig.RangeHogo end
+    if k == "Muki" then return AutoKillConfig.RangeMuki end
+    if k == "Grunt" then return AutoKillConfig.RangeGrunt end
+    return AutoKillConfig.RangeGata
+end
+
+local function getAutoKillFireDelay()
+    local n = tonumber(AutoKillConfig.FireDelay) or DEFAULT_SETTINGS.AutoKillFireDelay
+    if n < 0.01 then n = 0.01 end
+    return n
+end
+
+local setFireSettingsPanelVisible = function() end
+
+local function smallNotify(title, content, icon)
+    pcall(function()
+        if WindUI and WindUI.Notify then
+            WindUI:Notify({
+                Title = title or "Nevoirs",
+                Content = content or "",
+                Icon = icon or AUTO_KILL_ICON,
+                Duration = 2,
+            })
+        end
+    end)
+end
+
+local function getGunActionRemote()
+    local r = ReplicatedStorage:FindFirstChild("GunAction")
+    if r and r:IsA("RemoteEvent") then return r end
+
+    local okGG, ggRemote = pcall(function()
+        return GG and GG.R and GG.R.GunAction
+    end)
+    if okGG and ggRemote and typeof(ggRemote) == "Instance" and ggRemote:IsA("RemoteEvent") then
+        return ggRemote
+    end
+
+    for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+        if d.Name == "GunAction" and d:IsA("RemoteEvent") then
+            return d
+        end
+    end
+
+    return nil
+end
+
+local function collectRemoteEvents(obj)
+    local remotes, seen = {}, {}
+
+    local function add(r)
+        if r and typeof(r) == "Instance" and r:IsA("RemoteEvent") and not seen[r] then
+            seen[r] = true
+            table.insert(remotes, r)
+        end
+    end
+
+    if not obj or not obj.Parent then return remotes end
+
+    if obj:IsA("RemoteEvent") then
+        add(obj)
+        return remotes
+    end
+
+    add(obj:FindFirstChildWhichIsA("RemoteEvent"))
+
+    local hitbox = obj:FindFirstChild("Hitbox", true)
+    if hitbox then
+        add(hitbox:FindFirstChild("RemoteEvent"))
+        add(hitbox:FindFirstChildWhichIsA("RemoteEvent"))
+    end
+
+    for _, d in ipairs(obj:GetDescendants()) do
+        if d:IsA("RemoteEvent") then
+            add(d)
+            if #remotes >= 12 then break end -- chặn trường hợp model có quá nhiều remote phụ
+        end
+    end
+
+    return remotes
+end
+
+local function nearestBasePartOf(obj)
+    if not obj or not obj.Parent then return nil, math.huge end
+    local hrp = getHRP(getChar())
+    if not hrp then return nil, math.huge end
+
+    if not obj:IsA("BasePart") then
+        for _, name in ipairs({"Hitbox", "HumanoidRootPart", "RootPart", "Head"}) do
+            local preferred = obj:FindFirstChild(name, true)
+            if preferred and validPart(preferred) then return preferred, (preferred.Position - hrp.Position).Magnitude end
+        end
+    end
+    local best, bestDist = nil, math.huge
+
+    local function try(part)
+        if part and validPart(part) then
+            local d = (part.Position - hrp.Position).Magnitude
+            if d < bestDist then
+                best, bestDist = part, d
+            end
+        end
+    end
+
+    if obj:IsA("BasePart") then
+        try(obj)
+    elseif obj:IsA("Model") or obj:IsA("Folder") then
+        -- Ưu tiên Hitbox/HumanoidRootPart nhưng vẫn fallback part gần nhất.
+        try(obj:FindFirstChild("Hitbox", true))
+        try(obj:FindFirstChild("HumanoidRootPart", true))
+        try(obj:FindFirstChild("Head", true))
+        for _, d in ipairs(obj:GetDescendants()) do
+            if d:IsA("BasePart") then
+                try(d)
+            end
+        end
+    else
+        try(rootOf(obj))
+        for _, d in ipairs(obj:GetDescendants()) do
+            if d:IsA("BasePart") then
+                try(d)
+            end
+        end
+    end
+
+    return best, bestDist
+end
+
+local function getAimDot(targetPos)
+    local cam = Workspace.CurrentCamera
+    if not cam or not targetPos then return 0 end
+    local delta = targetPos - cam.CFrame.Position
+    if delta.Magnitude <= 0.01 then return 1 end
+    return math.clamp(cam.CFrame.LookVector:Dot(delta.Unit), -1, 1)
+end
+
+-- FleshBlock: khôi phục đúng behavior của nevoirs.lua gốc.
+-- Chỉ lock body mà camera/raycast thực sự đang nhìn tới; fallback bằng aim-dot khi raycast không có hit.
+AutoKillConfig.IsLookingAtFleshBody = (function()
+    local function getLookRayHit(maxDistance)
+        local cam = Workspace.CurrentCamera
+        if not cam then return nil end
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.IgnoreWater = true
+        local ignore = {}
+        local char = getChar()
+        if char then table.insert(ignore, char) end
+        params.FilterDescendantsInstances = ignore
+
+        local ok, result = pcall(function()
+            return Workspace:Raycast(cam.CFrame.Position, cam.CFrame.LookVector * (tonumber(maxDistance) or 250), params)
+        end)
+        if ok and result then return result.Instance, result.Position end
+        return nil
+    end
+
+    return function(body)
+        if not validPart(body) then return false end
+        local hit = getLookRayHit(260)
+        if not hit then
+            return getAimDot(body.Position) >= 0.86
+        end
+        if hit == body or hit:IsDescendantOf(body) then return true end
+        local block = body.Parent
+        if block and (hit == block or hit:IsDescendantOf(block)) then return true end
+        return false
+    end
+end)()
+
+local CameraReplicaBridge = (function()
+    -- Reuse one forwarding hook across reruns. A new session only takes ownership
+    -- of the target value; cleanup detaches it without unhooking someone else's hook.
+    local shared = rawget(_G, "__CCNKCameraBridgeV2")
+    if type(shared) ~= "table" then shared={}; _G.__CCNKCameraBridgeV2=shared end
+    local owner = {}
+    shared.owner=owner; shared.target=nil
+    local api={}
+    function api:Set(cf) if shared.owner==owner then shared.target=cf end end
+    function api:Release() if shared.owner==owner then shared.target=nil; shared.owner=nil end end
+    function api:Install()
+        local modules=ReplicatedStorage:FindFirstChild("modules")
+        local packetModule=modules and modules:FindFirstChild("Packet")
+        if not packetModule then return false end
+        local ok,packet=pcall(require,packetModule)
+        if not ok then return false end
+        local okState,updateState=pcall(function() return packet.unreliablesend.ReplicationService.Character.updateState end)
+        if not okState or not updateState then return false end
+        local mt=getmetatable(updateState)
+        if type(mt)~="table" or type(mt.__call)~="function" then return false end
+        if shared.meta==mt and shared.installed then CameraReplicaHookInstalled=true; return true end
+        if os.clock()-CameraReplicaLastTry<3 then return false end
+        CameraReplicaLastTry=os.clock()
+        local hookFn=(GG and GG.LowerC) or hookfunction
+        if type(hookFn)~="function" then return false end
+        local old
+        local handler=function(...)
+            local args=table.pack(...)
+            if shared.owner and shared.target and args[1] and args[1].__name=="updateState" then
+                local cam=Workspace.CurrentCamera
+                if cam then args[2]=CFrame.lookAt(cam.CFrame.Position,shared.target.Position) end
+            end
+            return old(table.unpack(args,1,args.n))
+        end
+        local closure=type(newcclosure)=="function" and newcclosure(handler) or handler
+        local hooked,result=pcall(hookFn,mt.__call,closure)
+        if not hooked or type(result)~="function" then return false end
+        old=result
+        shared.meta=mt; shared.installed=true
+        CameraReplicaHookInstalled=true
+        return true
+    end
+    return api
+end)()
+
+local function installCameraReplicaHook() return CameraReplicaBridge:Install() end
+
+local function addKillTarget(out, inst, kind, maxRange)
+    if not inst or not inst.Parent then return end
+    local hum = inst:IsA("Model") and inst:FindFirstChildOfClass("Humanoid") or nil
+    if hum and hum.Health <= 0 then return end
+
+    local anchor, dist = nearestBasePartOf(inst)
+    if not anchor or dist > maxRange then return end
+
+    local pos = anchor.Position
+    local dot = getAimDot(pos)
+    local remotes = collectRemoteEvents(inst)
+
+    table.insert(out, {
+        kind = kind or tostring(inst.Name or "Monster"),
+        instance = inst,
+        anchor = anchor,
+        cframe = CFrame.new(pos),
+        dist = dist,
+        dot = dot,
+        maxRange = maxRange,
+        remoteCount = #remotes,
+        remotes = remotes,
+        lockStarted = os.clock(),
+        lastNoRemoteNotice = 0,
+    })
+end
+
+local function collectGataTargets(out)
+    local grunts = safeFolder({"Section1", "Grunts"})
+    if not grunts then return end
+
+    for _, gata in ipairs(grunts:GetChildren()) do
+        if gata:IsA("Model") and gata:FindFirstChildOfClass("Humanoid") then
+            addKillTarget(out, gata, "Gata", getKillRange("Gata"))
+        end
+    end
+end
+
+local function collectGruntTargets(out)
+    -- Grunts mở rộng: ví dụ Section2.Grunts.Grunt1. Dùng chung range với Gata/Creep.
+    local seen = {}
+
+    local function scanFolder(folder)
+        if not folder then return end
+        local pool = folder:GetDescendants()
+        table.insert(pool, 1, folder)
+        for _, obj in ipairs(pool) do
+            if obj:IsA("Model") and not seen[obj] then
+                local n = tostring(obj.Name or ""):lower()
+                if n:find("grunt", 1, true) and (obj:FindFirstChildOfClass("Humanoid") or rootOf(obj)) then
+                    seen[obj] = true
+                    addKillTarget(out, obj, obj.Name, getKillRange("Grunt"))
+                end
+            end
+        end
+    end
+
+    scanFolder(safeFolder({"Section2", "Grunts"}))
+    scanFolder(safeFolder({"Section3", "Grunts"}))
+    scanFolder(safeFolder({"Section4", "Grunts"}))
+    scanFolder(safeFolder({"Section5", "Grunts"}))
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj.Name:match("^Section%d+") and obj.Name ~= "Section1" then
+            scanFolder(obj:FindFirstChild("Grunts"))
+        end
+    end
+end
+
+local function collectMukiTargets(out)
+    local roots = {
+        safeFolder({"Section4", "Lab", "Floor1", "Objective2", "MukiSpawn"}),
+        safeFolder({"Section4", "Lab", "Floor1", "Objective2"}),
+    }
+    local seen = {}
+
+    for _, root in pairs(roots) do
+        if root then
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("Model") and not seen[obj] then
+                    local n = tostring(obj.Name or ""):lower()
+                    if n:find("muki", 1, true) then
+                        seen[obj] = true
+                        addKillTarget(out, obj, obj.Name, getKillRange(obj.Name))
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function collectHogoGuntaiTargets(out)
+    local paths = {
+        {"Section5", "StairsSection", "Monster"},
+        {"Section4", "Monster"},
+        {"Section4"},
+    }
+    local seen = {}
+
+    for _, path in ipairs(paths) do
+        local folder = safeFolder(path)
+        if folder then
+            for _, obj in ipairs(folder:GetDescendants()) do
+                if obj:IsA("Model") and not seen[obj] then
+                    local n = tostring(obj.Name or ""):lower()
+                    if n:find("hogoguntai", 1, true) or n:find("hogo", 1, true) then
+                        seen[obj] = true
+                        addKillTarget(out, obj, obj.Name, getKillRange(obj.Name))
+                    end
+                end
+            end
+        end
+    end
+end
+
+
+local function collectFleshBlockTargets(out)
+    -- Theo path bạn gửi: Section5.StairsSection.FleshBlock.Block.body
+    -- Bản này CHỈ lấy đúng BasePart tên body làm anchor/range.
+    -- Không lấy Block/Screen/SurfaceGui/parent để tránh remote global làm bắn toàn bộ FleshBlock.
+    local roots = {
+        safeFolder({"Section5", "StairsSection", "FleshBlock"}),
+        safeFolder({"Section5", "StairsSection"}),
+    }
+    local seenBody = {}
+
+    local function tryAddBody(body)
+        if not body or not validPart(body) then return end
+        if tostring(body.Name or ""):lower() ~= "body" then return end
+        if seenBody[body] then return end
+
+        local hrp = getHRP(getChar())
+        if not hrp then return end
+
+        local range = getKillRange("FleshBlock")
+        local dist = (body.Position - hrp.Position).Magnitude
+        if dist > range then return end
+
+        -- Logic gốc nevoirs.lua: FleshBlock chỉ hợp lệ khi đang nhìn/raycast đúng body.
+        -- Điều này tránh lock cả cụm FleshBlock chỉ vì chúng nằm trong range.
+        if not AutoKillConfig.IsLookingAtFleshBody(body) then return end
+
+        seenBody[body] = true
+
+        local block = body.Parent or body
+        local remotes = collectRemoteEvents(body)
+
+        table.insert(out, {
+            kind = "FleshBlock",
+            instance = block,
+            anchor = body,
+            fleshBody = body,
+            cframe = body.CFrame,
+            dist = dist,
+            dot = getAimDot(body.Position),
+            maxRange = range,
+            remoteCount = #remotes,
+            remotes = remotes,
+            lockStarted = os.clock(),
+            lastNoRemoteNotice = 0,
+        })
+    end
+
+    for _, root in pairs(roots) do
+        if root then
+            -- Ưu tiên path chính xác trước.
+            local directBlock = root:FindFirstChild("Block")
+            local directBody = directBlock and (directBlock:FindFirstChild("body") or directBlock:FindFirstChild("Body"))
+            tryAddBody(directBody)
+
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("BasePart") and tostring(obj.Name or ""):lower() == "body" then
+                    local path = tostring(obj:GetFullName() or ""):lower()
+                    if path:find("fleshblock", 1, true) then
+                        tryAddBody(obj)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function collectSpiderTargets(out)
+    local spiders = safeFolder({"Section2", "MAINOBJECTIVE2", "Spiders"})
+    if not spiders then return end
+
+    for _, spider in ipairs(spiders:GetChildren()) do
+        if spider.Name == "AkariSpider" then
+            local hitbox = spider:FindFirstChild("Hitbox")
+            local remote = hitbox and hitbox:FindFirstChild("RemoteEvent")
+            if hitbox and validPart(hitbox) and getDistance(hitbox) <= getKillRange("Spider") then
+                table.insert(out, {
+                    kind = "Spider",
+                    instance = spider,
+                    anchor = hitbox,
+                    cframe = hitbox.CFrame,
+                    dist = getDistance(hitbox),
+                    dot = getAimDot(hitbox.Position),
+                    maxRange = getKillRange("Spider"),
+                    remoteCount = (remote and remote:IsA("RemoteEvent")) and 1 or 0,
+                    remotes = (remote and remote:IsA("RemoteEvent")) and {remote} or {},
+                    lockStarted = os.clock(),
+                    lastNoRemoteNotice = 0,
+                })
+            end
+        end
+    end
+end
+
+local function refreshKillTarget(target)
+    if not target or not target.instance or not target.instance.Parent then return false end
+
+    local hum = target.instance:IsA("Model") and target.instance:FindFirstChildOfClass("Humanoid") or nil
+    if hum and hum.Health <= 0 then return false end
+    local maxRange = getKillRange(target.kind)
+    local anchor, dist
+
+    local nk = normalizeKillKind(target.kind)
+    if nk == "Spider" then
+        anchor = target.instance:FindFirstChild("Hitbox")
+        if anchor then dist = getDistance(anchor) end
+    elseif nk == "FleshBlock" then
+        -- FleshBlock chỉ được tính theo body chính đã lock. Không fallback sang nearest part/parent.
+        anchor = target.fleshBody
+        if not validPart(anchor) then
+            anchor = target.instance:FindFirstChild("body", true) or target.instance:FindFirstChild("Body", true)
+        end
+        if anchor and validPart(anchor) and tostring(anchor.Name or ""):lower() == "body" then
+            dist = getDistance(anchor)
+            -- Logic gốc: đang giữ target cũng phải tiếp tục nhìn đúng FleshBlock body.
+            if not AutoKillConfig.IsLookingAtFleshBody(anchor) then return false end
+        else
+            return false
+        end
+    else
+        local hum = target.instance:IsA("Model") and target.instance:FindFirstChildOfClass("Humanoid") or nil
+        if hum and hum.Health <= 0 then return false end
+        anchor, dist = nearestBasePartOf(target.instance)
+    end
+
+    if not anchor or not validPart(anchor) or not dist or dist > maxRange then return false end
+
+    local pos = anchor.Position
+    target.anchor = anchor
+    target.dist = dist
+    target.dot = getAimDot(pos)
+    target.cframe = (normalizeKillKind(target.kind) == "Spider" or normalizeKillKind(target.kind) == "FleshBlock") and anchor.CFrame or CFrame.new(pos)
+    local remoteRoot = (nk == "Spider" or nk == "FleshBlock") and anchor or target.instance
+    local stale = target.remoteRoot ~= remoteRoot or os.clock() >= (target.remoteCheckAt or 0)
+    for _, remote in ipairs(target.remotes or {}) do if not remote.Parent then stale = true; break end end
+    if stale then
+        target.remotes = collectRemoteEvents(remoteRoot)
+        target.remoteRoot = remoteRoot
+        target.remoteCheckAt = os.clock() + 0.5
+    end
+    if nk == "FleshBlock" then target.fleshBody = anchor end
+    target.remoteCount = #(target.remotes or {})
+
+    return true
+end
+
+local function sortNearbyKillTargets(targets, mode)
+    table.sort(targets, function(a, b)
+        if mode == "Aura" then
+            local ah = normalizeKillKind(a.kind) == "Hogo" and 0 or 1
+            local bh = normalizeKillKind(b.kind) == "Hogo" and 0 or 1
+            if ah ~= bh then return ah < bh end
+        end
+        if mode == "Focus" then
+            local ab = math.floor(((a.dot or -1) + 1) / 0.12)
+            local bb = math.floor(((b.dot or -1) + 1) / 0.12)
+            if ab ~= bb then return ab > bb end
+        end
+        if a.dist ~= b.dist then return a.dist < b.dist end
+        return a.instance:GetFullName() < b.instance:GetFullName()
+    end)
+end
+
+local function collectNearbyKillTargets(mode)
+    local raw = {}
+    collectGataTargets(raw); collectGruntTargets(raw); collectMukiTargets(raw)
+    collectHogoGuntaiTargets(raw); collectFleshBlockTargets(raw); collectSpiderTargets(raw)
+    local targets, seen = {}, {}
+    for _, target in ipairs(raw) do
+        local key = target.fleshBody or target.instance
+        if not seen[key] then seen[key] = true; table.insert(targets, target) end
+    end
+    sortNearbyKillTargets(targets, mode or "Focus")
+    return targets
+end
+
+local function chooseNearbyKillTarget()
+    return collectNearbyKillTargets("Focus")[1]
+end
+
+local function fireNearbyKillOnce(target, gunAction)
+    if not refreshKillTarget(target) then return false end
+    CAMERAREPLICA = target.cframe
+    CameraReplicaBridge:Set(target.cframe)
+    local sent = false
+    if gunAction and gunAction.Parent then
+        sent = pcall(function() gunAction:FireServer("fire") end)
+    end
+    -- Prefer one remote at the known target location; never fire parent/global Flesh remotes.
+    local kind = normalizeKillKind(target.kind)
+    local remoteRoot = (kind == "Spider" or kind == "FleshBlock") and target.anchor or target.instance
+    local remote = remoteRoot and remoteRoot:FindFirstChild("RemoteEvent")
+    if not remote or not remote:IsA("RemoteEvent") then remote = (target.remotes or {})[1] end
+    if remote and remote.Parent and remote:IsA("RemoteEvent") then
+        local acceptedCall = pcall(function() remote:FireServer() end)
+        sent = acceptedCall or sent
+    end
+    return sent -- dispatch only, never a claim that damage was accepted
+end
+
+local AuraPolicy = (function()
+-- Pure scheduling policy. Burst means one request per selected target in a batch;
+-- HP observations are evidence of progress, not proof of simultaneous server hits.
+local Policy = {}
+
+local function finite(value, fallback)
+    if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+        return fallback
+    end
+    return value
+end
+
+local function count(set)
+    local total = 0
+    for _ in pairs(set) do total += 1 end
+    return total
+end
+
+local function resetWindow(state, now)
+    state.attempts = {}
+    state.observed = {}
+    state.progressed = {}
+    state.startedAt = now
+    state._probeActive = true
+end
+
+local function result(state, transport, reason)
+    state.reason = reason
+    return transport, reason
+end
+
+function Policy.new(now, window, cooldown)
+    return {
+        attempts = {},
+        observed = {},
+        progressed = {},
+        startedAt = finite(now, 0),
+        cooldownUntil = 0,
+        reason = "probing",
+        window = math.max(0, finite(window, 3)),
+        cooldown = math.max(0, finite(cooldown, 6)),
+        _probeActive = true,
+    }
+end
+
+function Policy.note(state, id, hasHealth, progressed)
+    if id == nil then return end
+    state.attempts[id] = true
+    if hasHealth then
+        state.observed[id] = true
+        if progressed then state.progressed[id] = true end
+    end
+end
+
+function Policy.mode(state, now, availableCount, requestedMode, allowFallback)
+    now = finite(now, state.startedAt)
+    availableCount = math.max(0, finite(availableCount, 0))
+    if requestedMode == "Burst" then return result(state, "Burst", "forced_burst") end
+    if requestedMode == "Serial" then return result(state, "Serial", "forced_serial") end
+
+    if availableCount < 2 then
+        -- Time with only one target must not consume the next multi-target trial.
+        state._probeActive = false
+        return result(state, "Serial", "single_target")
+    end
+    if now < state.cooldownUntil then
+        return result(state, "Serial", "cooldown")
+    end
+    if not state._probeActive or now < state.startedAt then
+        resetWindow(state, now)
+    end
+    if now - state.startedAt < state.window then
+        return result(state, "Burst", "probing")
+    end
+
+    local attempted = count(state.attempts)
+    local observed = count(state.observed)
+    local progressed = count(state.progressed)
+    if attempted >= 2 and progressed >= 2 then
+        resetWindow(state, now)
+        return result(state, "Burst", "multi_hp_progress")
+    end
+    if allowFallback then
+        state.cooldownUntil = now + state.cooldown
+        state._probeActive = false
+        return result(state, "Serial", observed > 0 and "no_multi_progress" or "no_health_signal")
+    end
+    resetWindow(state, now)
+    return result(state, "Burst", "fallback_disabled")
+end
+
+function Policy.summary(state)
+    local attempts = count(state.attempts)
+    local observed = count(state.observed)
+    return {
+        attempts = attempts,
+        observed = observed,
+        progressed = count(state.progressed),
+        unknown = attempts - observed,
+        startedAt = state.startedAt,
+        cooldownUntil = state.cooldownUntil,
+        reason = state.reason,
+    }
+end
+
+return Policy
+
+end)()
+
+local NearbyEngine = (function()
+    local E = {generation = 0, config = {
+        Mode = getSetting("NKV2Mode", "Aura") == "Focus" and "Focus" or "Aura",
+        Transport = tostring(getSetting("NKV2Transport", "Auto")),
+        BatchSize = getNumberSetting("NKV2BatchSize", 3, 2, 8),
+        BatchDelay = getNumberSetting("NKV2BatchDelay", 0.12, 0.05, 2),
+        TrialWindow = getNumberSetting("NKV2TrialWindow", 3, 1, 15),
+        RetryAfter = getNumberSetting("NKV2RetryAfter", 10, 3, 60),
+        SerialDwell = getNumberSetting("NKV2SerialDwell", 0.30, 0.08, 3),
+        StallAfter = getNumberSetting("NKV2StallAfter", 2, 0.5, 15),
+        Fallback = getSetting("NKV2Fallback", 1) ~= 0,
+        Glow = getSetting("NKV2Glow", 1) ~= 0,
+        Marker = getSetting("NKV2Marker", 1) ~= 0,
+        HUD = getSetting("NKV2HUD", 1) ~= 0,
+        AutoEquip = getSetting("NKV2AutoEquip", 1) ~= 0,
+        ManualLock = getSetting("NKV2ManualLock", 1) ~= 0,
+        PriorityDanger = getSetting("NKV2PriorityDanger", 1) ~= 0,
+    }, report = {version = "CC-Aura-Test-1", sent = 0, batches = 0, hpSignals = 0,
+        distinctHPSignals = 0, fallbacks = 0, note = "HP changes are observations; multiplayer damage is not attributed."}}
+    if E.config.Transport ~= "Auto" and E.config.Transport ~= "Burst" and E.config.Transport ~= "Serial" then
+        E.config.Transport = "Auto"
+    end
+    local records = setmetatable({}, {__mode = "k"})
+    local nextID, rotation, lastTurn, serialKey = 0, 0, 0, nil
+    local cache, lastScan, charAt, dependencyAt = {}, -math.huge, nil, -math.huge
+    local policy = AuraPolicy.new(os.clock(), E.config.TrialWindow, E.config.RetryAfter)
+    policy._probeActive = false
+    local borrowed, ownHighlight, marker, markerButton, markerConn, visualKey = {}, nil, nil, nil, nil, nil
+    local hud, hudTop, hudBottom, lastHUD = nil, nil, nil, -math.huge
+    local pinned, lastGunEquip, status, transport = nil, -math.huge, "Đã tắt", "Serial"
+    local statusDetail = ""
+    local function keyOf(t) return t and (t.fleshBody or t.instance) end
+    local function findHum(t)
+        return t.instance and t.instance:IsA("Model") and t.instance:FindFirstChildOfClass("Humanoid") or nil
+    end
+    local function healthOf(h)
+        if not h then return nil end
+        local ok, value = pcall(function() return h.Health end)
+        if ok and type(value) == "number" and value == value then return value end
+        return nil
+    end
+    local function record(t, now)
+        local key = keyOf(t)
+        local rec = records[key]
+        if not rec then
+            nextID += 1
+            local h = findHum(t)
+            rec = {id = nextID, hum = h, hp = healthOf(h), attempted = false,
+                lastProgress = now, lastTry = 0, suspendedUntil = 0, kind = normalizeKillKind(t.kind)}
+            records[key] = rec
+        end
+        local currentHum = findHum(t)
+        if currentHum ~= rec.hum then rec.hum=currentHum; rec.hp=healthOf(currentHum) end
+        rec.target = t
+        return rec
+    end
+    local function restoreBorrowed()
+        for hl, saved in pairs(borrowed) do
+            if hl and hl.Parent then
+                local live
+                for _, pool in pairs(espPool) do
+                    for _, entry in pairs(pool) do if entry.hl == hl then live = entry; break end end
+                    if live then break end
+                end
+                if live then
+                    pcall(function()
+                        hl.FillColor = live.color or saved.fill
+                        hl.OutlineColor = saved.outline
+                        hl.FillTransparency = saved.fillAlpha
+                        hl.OutlineTransparency = saved.outlineAlpha
+                        hl.Enabled = saved.enabled
+                    end)
+                end
+            end
+        end
+        table.clear(borrowed)
+    end
+    local function clearVisual()
+        restoreBorrowed()
+        if ownHighlight then ownHighlight:Destroy(); ownHighlight = nil end
+        if markerConn then markerConn:Disconnect(); markerConn = nil end
+        if marker then marker:Destroy(); marker = nil; markerButton = nil end
+        visualKey = nil
+    end
+    local function setReplica(cf)
+        CAMERAREPLICA = cf
+        CameraReplicaBridge:Set(cf)
+    end
+    local function updateVisual(t)
+        local key = keyOf(t)
+        if not t or not t.anchor or not t.anchor.Parent then clearVisual(); return end
+        if visualKey ~= key then clearVisual(); visualKey = key end
+        local adornee = t.fleshBody or t.instance
+        if E.config.Glow then
+            local chosen
+            for _, pool in pairs(espPool) do
+                for _, entry in pairs(pool) do
+                    local hl = entry.hl
+                    if hl and hl.Parent and (entry.adornee == adornee or entry.anchor == t.anchor) then
+                        if not borrowed[hl] then
+                            borrowed[hl] = {fill=hl.FillColor, outline=hl.OutlineColor,
+                                fillAlpha=hl.FillTransparency, outlineAlpha=hl.OutlineTransparency, enabled=hl.Enabled}
+                        end
+                        if not chosen then chosen = hl end
+                        hl.Enabled = (hl == chosen)
+                    end
+                end
+            end
+            if chosen then
+                if ownHighlight then ownHighlight:Destroy(); ownHighlight = nil end
+            else
+                if not ownHighlight or not ownHighlight.Parent then
+                    ownHighlight = Instance.new("Highlight")
+                    ownHighlight.Name = "CC_NearbySelected"
+                    ownHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    ownHighlight.Parent = ScreenGui
+                end
+                chosen = ownHighlight
+            end
+            chosen.Adornee = adornee
+            chosen.FillColor = Color3.fromRGB(255, 199, 101)
+            chosen.OutlineColor = Color3.fromRGB(255, 214, 131)
+            chosen.FillTransparency = 0.92
+            chosen.OutlineTransparency = 0.08
+            chosen.Enabled = true
+        else
+            restoreBorrowed()
+            if ownHighlight then ownHighlight:Destroy(); ownHighlight=nil end
+        end
+        if E.config.Marker then
+            if not marker or not marker.Parent then
+                marker = Instance.new("BillboardGui")
+                marker.Name = "CC_NearbyTarget"
+                marker.AlwaysOnTop = true
+                marker.Active = true
+                marker.Size = UDim2.fromOffset(178, 29)
+                marker.StudsOffset = Vector3.new(0, 3.6, 0)
+                marker.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                markerButton = Instance.new("TextButton")
+                markerButton.Size = UDim2.fromScale(1, 1)
+                markerButton.BackgroundColor3 = Color3.fromRGB(18, 21, 28)
+                markerButton.BackgroundTransparency = 0.20
+                markerButton.TextColor3 = Color3.fromRGB(255, 218, 151)
+                markerButton.Font = Enum.Font.GothamMedium
+                markerButton.TextSize = 11
+                markerButton.AutoButtonColor = false
+                markerButton.Parent = marker
+                local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 7); c.Parent = markerButton
+                markerConn = markerButton.Activated:Connect(function()
+                    if E.config.ManualLock and E.config.Mode == "Focus" then
+                        if pinned == visualKey then pinned=nil else pinned=visualKey end
+                    end
+                end)
+            end
+            marker.Adornee = t.anchor
+            markerButton.Text = string.format("%s · %s · %.0f st", pinned == key and "GHIM" or "TARGET", normalizeKillKind(t.kind), t.dist or 0)
+        elseif marker then
+            if markerConn then markerConn:Disconnect(); markerConn=nil end
+            marker:Destroy(); marker=nil; markerButton=nil
+        end
+    end
+    local function showStatus(now)
+        if not E.config.HUD or not States.AutoNearbyKill then if hud then hud.Visible=false end; return end
+        if now-lastHUD < 0.15 then return end
+        lastHUD=now
+        if not hud or not hud.Parent then
+            hud=Instance.new("Frame"); hud.Name="CC_AuraStatus"; hud.AnchorPoint=Vector2.new(.5,0)
+            hud.Position=UDim2.new(.5,0,0,42); hud.Size=UDim2.fromOffset(UserInputService.TouchEnabled and 278 or 320,44)
+            hud.BackgroundColor3=Color3.fromRGB(15,19,27); hud.BackgroundTransparency=.15; hud.BorderSizePixel=0; hud.Parent=ScreenGui
+            local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(0,8); c.Parent=hud
+            hudTop=Instance.new("TextLabel"); hudTop.Size=UDim2.new(1,-14,0,22); hudTop.Position=UDim2.fromOffset(7,0)
+            hudTop.BackgroundTransparency=1; hudTop.TextSize=11; hudTop.Font=Enum.Font.GothamMedium; hudTop.TextColor3=Color3.fromRGB(235,220,185); hudTop.TextXAlignment=Enum.TextXAlignment.Left; hudTop.Parent=hud
+            hudBottom=hudTop:Clone(); hudBottom.Position=UDim2.fromOffset(7,21); hudBottom.TextColor3=Color3.fromRGB(165,180,200); hudBottom.TextSize=10; hudBottom.Parent=hud
+        end
+        hud.Visible=true
+        hudTop.Text=string.format("%s · %s · %s", E.config.Mode=="Aura" and "AURA" or "TẬP TRUNG", transport, status)
+        hudBottom.Text=statusDetail
+    end
+    local function reset(now)
+        clearVisual(); setReplica(nil); AutoNearbyKillTarget=nil; States.NearbyTarget=nil; pinned=nil
+        cache={}; lastScan=-math.huge; rotation=0; serialKey=nil; lastTurn=0
+        records=setmetatable({}, {__mode="k"})
+        policy=AuraPolicy.new(now,E.config.TrialWindow,E.config.RetryAfter)
+        policy._probeActive=false
+    end
+    local function allowed(t)
+        local k=normalizeKillKind(t.kind)
+        return E.config["Allow"..k] ~= false
+    end
+    local function sample(now)
+        for _, rec in pairs(records) do
+            local hp=healthOf(rec.hum)
+            local changed=rec.attempted and hp~=nil and rec.hp~=nil and hp < rec.hp - 0.001
+            if changed then
+                rec.lastProgress=now
+                E.report.hpSignals += 1
+                if not rec.everProgress then rec.everProgress=true; E.report.distinctHPSignals+=1 end
+            end
+            if rec.attempted and rec.burstWindow==policy.startedAt and policy._probeActive
+                and now<=policy.startedAt+policy.window and policy.attempts[rec.id] then
+                AuraPolicy.note(policy,rec.id,hp~=nil,changed and true or false)
+            end
+            if hp~=nil then rec.hp=hp end
+        end
+    end
+    local function candidates(now)
+        if now-lastScan >= .20 then
+            cache=collectNearbyKillTargets(E.config.Mode)
+            lastScan=now
+        end
+        local out={}
+        for _, t in ipairs(cache) do
+            if allowed(t) and refreshKillTarget(t) then
+                local rec=record(t,now)
+                if now>=rec.suspendedUntil then table.insert(out,t) end
+            end
+        end
+        sortNearbyKillTargets(out,E.config.Mode=="Aura" and not E.config.PriorityDanger and "BalancedAura" or E.config.Mode)
+        return out
+    end
+    local function attempt(t,gun,now)
+        local rec=record(t,now)
+        if not rec.attempted then rec.lastProgress=now end
+        if fireNearbyKillOnce(t,gun) then
+            rec.attempted=true; rec.lastTry=now
+            E.report.sent+=1
+            if transport=="Burst" then
+                rec.burstWindow=policy.startedAt
+                AuraPolicy.note(policy,rec.id,healthOf(rec.hum)~=nil,false)
+            end
+            return true
+        end
+        return false
+    end
+    local function equip(now)
+        if not E.config.AutoEquip or now-lastGunEquip<1.5 then return end
+        lastGunEquip=now
+        local char=getChar(); local hum=char and char:FindFirstChildOfClass("Humanoid")
+        if not hum or char:FindFirstChild("Gun") then return end
+        local bp=LocalPlayer:FindFirstChildOfClass("Backpack"); local gun=bp and bp:FindFirstChild("Gun")
+        if gun and gun:IsA("Tool") then pcall(function() hum:EquipTool(gun) end) end
+    end
+    function E:Configure(key,value,setting)
+        self.config[key]=value
+        if setting then setSetting(setting,type(value)=="boolean" and (value and 1 or 0) or value) end
+        reset(os.clock())
+    end
+    function E:SetMode(mode)
+        if mode~="Focus" and mode~="Aura" then return end
+        self.config.Mode=mode; setSetting("NKV2Mode",mode); reset(os.clock())
+        if self.ModeSink then pcall(self.ModeSink,mode) end
+    end
+    function E:ReleasePin() pinned=nil; AutoNearbyKillTarget=nil end
+    function E:ResetTrial()
+        self.report={version="CC-Aura-Test-1",sent=0,batches=0,hpSignals=0,distinctHPSignals=0,fallbacks=0,
+            note="HP changes are observations; multiplayer damage is not attributed."}
+        reset(os.clock()); status="Đã đặt lại lượt thử"
+    end
+    function E:SaveReport()
+        local report={version=self.report.version,mode=self.config.Mode,transport=self.config.Transport,
+            actualTransport=transport,settings={batchSize=self.config.BatchSize,batchDelay=self.config.BatchDelay,
+            trialWindow=self.config.TrialWindow,fallback=self.config.Fallback,rangeSpider=AutoKillConfig.RangeSpider},
+            results=self.report,policy=AuraPolicy.summary(policy),status=status,detail=statusDetail}
+        local ok=pcall(function()
+            if type(writefile)~="function" then error("Không có writefile") end
+            writefile("CC_Aura_Test_Report.json",HttpService:JSONEncode(report))
+        end)
+        smallNotify("Aura test",ok and "Đã lưu CC_Aura_Test_Report.json" or "Không lưu được file; xem bảng trạng thái")
+        if not ok then print("[CC Aura]",HttpService:JSONEncode(report)) end
+    end
+    function E:SetEnabled(enabled)
+        enabled=enabled and true or false
+        if enabled and States.AutoNearbyKill and AutoNearbyKillRunning then return end
+        States.AutoNearbyKill=enabled; self.generation+=1
+        local generation=self.generation
+        reset(os.clock())
+        dependencyAt=-math.huge
+        AutoNearbyKillRunning=enabled
+        if self.MasterSink then pcall(self.MasterSink,enabled) end
+        if not enabled then status="Đã tắt"; if hud then hud.Visible=false end; return end
+        task.spawn(function()
+            local gun=nil
+            local ok,err=xpcall(function()
+                while States.AutoNearbyKill and generation==self.generation do
+                    local now=os.clock(); local char=getChar(); local hrp=getHRP(char)
+                    local hum=char and char:FindFirstChildOfClass("Humanoid")
+                    if char~=charAt then charAt=char; reset(now); gun=nil; dependencyAt=-math.huge end
+                    if not hrp or (hum and hum.Health<=0) then
+                        AuraPolicy.mode(policy,now,0,"Auto",true)
+                        clearVisual(); setReplica(nil); States.NearbyTarget=nil; AutoNearbyKillTarget=nil
+                        status="Chờ nhân vật"; statusDetail="Tác vụ cũ đã được nhả"; showStatus(now); task.wait(.20)
+                        continue
+                    end
+                    if now-dependencyAt>=2 or (gun and not gun.Parent) then
+                        gun=getGunActionRemote(); installCameraReplicaHook(); dependencyAt=now
+                    end
+                    equip(now); sample(now)
+                    local targets=candidates(now)
+                    if not gun then
+                        AuraPolicy.mode(policy,now,0,"Auto",true)
+                        status="Chờ GunAction"; statusDetail="Sẽ tự tìm lại, không cần tắt/bật"
+                        clearVisual(); setReplica(nil); States.NearbyTarget=nil; AutoNearbyKillTarget=nil
+                        showStatus(now); task.wait(.25); continue
+                    end
+                    if #targets==0 then
+                        AuraPolicy.mode(policy,now,0,"Auto",true)
+                        status="Chưa có mục tiêu"; statusDetail="Kiểm tra loại quái, range và điều kiện nhiệm vụ"
+                        clearVisual(); setReplica(nil); States.NearbyTarget=nil; AutoNearbyKillTarget=nil
+                        showStatus(now); task.wait(.20); continue
+                    end
+                    local primary
+                    if self.config.Mode=="Focus" then
+                        transport="Serial"
+                        for _,t in ipairs(targets) do
+                            if keyOf(t)==pinned then primary=t; break end
+                        end
+                        if pinned and not primary then pinned=nil end
+                        if not primary and AutoNearbyKillTarget then
+                            for _,t in ipairs(targets) do
+                                if keyOf(t)==keyOf(AutoNearbyKillTarget) then primary=t; break end
+                            end
+                        end
+                        primary=primary or targets[1]
+                        local rec=record(primary,now)
+                        if rec.attempted and now-rec.lastProgress>=self.config.StallAfter then
+                            rec.suspendedUntil=now+.7; rec.attempted=false; pinned=nil
+                            local stalled=keyOf(primary); primary=nil
+                            for _,candidate in ipairs(targets) do
+                                if keyOf(candidate)~=stalled then primary=candidate; break end
+                            end
+                        end
+                        if not primary then
+                            AutoNearbyKillTarget=nil; States.NearbyTarget=nil; clearVisual(); setReplica(nil)
+                            status="Chưa thấy tiến độ"; statusDetail="Tạm nhả mục tiêu, sẽ thử lại"
+                            showStatus(now); task.wait(.10); continue
+                        end
+                        attempt(primary,gun,now)
+                        status=pinned and "Đang ghim" or "Theo hướng nhìn"
+                        statusDetail=string.format("%s · %.0f st · HP giảm quan sát: %d",normalizeKillKind(primary.kind),primary.dist or 0,self.report.distinctHPSignals)
+                    else
+                        local reason
+                        transport,reason=AuraPolicy.mode(policy,now,#targets,self.config.Transport,self.config.Fallback)
+                        if transport=="Serial" and (reason=="no_multi_progress" or reason=="no_health_signal") and self.report.lastFallbackAt~=policy.cooldownUntil then
+                            self.report.lastFallbackAt=policy.cooldownUntil; self.report.fallbacks+=1
+                        end
+                        self.report.policyReason=reason
+                        if transport=="Burst" then
+                            local count=math.min(#targets,math.floor(self.config.BatchSize))
+                            local batch={}
+                            rotation=rotation%#targets
+                            for i=1,count do batch[i]=targets[(rotation+i-1)%#targets+1] end
+                            rotation=(rotation+count)%#targets
+                            primary=batch[1]
+                            for _,t in ipairs(batch) do
+                                if not States.AutoNearbyKill or generation~=self.generation then break end
+                                attempt(t,gun,now)
+                            end
+                            self.report.batches+=1
+                            -- One camera state exists; keep primary aim stable between batch ticks.
+                            setReplica(primary.cframe)
+                            status=string.format("Thử %d mục tiêu / nhịp",#batch)
+                            local summary=AuraPolicy.summary(policy)
+                            statusDetail=string.format("%s · HP giảm: %d mục tiêu · chưa quy công",self.config.Transport,summary.progressed or 0)
+                        else
+                            if now-lastTurn>=self.config.SerialDwell or not serialKey then
+                                rotation=rotation%#targets+1; serialKey=keyOf(targets[rotation]); lastTurn=now
+                            end
+                            for _,t in ipairs(targets) do if keyOf(t)==serialKey then primary=t; break end end
+                            primary=primary or targets[1]
+                            attempt(primary,gun,now)
+                            status=#targets==1 and "Một mục tiêu hợp lệ" or "Luân phiên từng mục tiêu"
+                            statusDetail=reason=="no_health_signal" and "Fallback: thiếu tín hiệu HP để đánh giá Burst"
+                                or reason=="no_multi_progress" and "Fallback: chưa thấy HP giảm trên nhiều mục tiêu"
+                                or reason=="cooldown" and "Đang luân phiên; Auto sẽ thử Burst lại"
+                                or string.format("%s · %.0f st",normalizeKillKind(primary.kind),primary.dist or 0)
+                        end
+                    end
+                    AutoNearbyKillTarget=primary; States.NearbyTarget=primary
+                    updateVisual(primary); showStatus(now)
+                    task.wait(transport=="Burst" and self.config.BatchDelay or getAutoKillFireDelay())
+                end
+            end,function(err) return debug.traceback(tostring(err),2) end)
+            if not ok then warn("[CC Nearby]",err) end
+            if generation==self.generation then
+                AutoNearbyKillRunning=false; States.AutoNearbyKill=false; reset(os.clock())
+                if hud then hud.Visible=false end
+                if self.MasterSink then pcall(self.MasterSink,false) end
+            end
+        end)
+    end
+    function E:Destroy()
+        self:SetEnabled(false)
+        if hud then hud:Destroy(); hud=nil end
+        CameraReplicaBridge:Release()
+    end
+    return E
+end)()
+
+local function setNearbyKillMode(mode) NearbyEngine:SetMode(mode) end
+local function toggleAutoNearbyKill(enabled) NearbyEngine:SetEnabled(enabled) end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+
+-- B3C1 PHASE ACTIONS
+-- Phase actions: giữ logic B3C1 cần thiết, không còn các nhánh Brutal đã loại bỏ.
+-- ══════════════════════════════════════════════════════════════════════════════
+local Phase = (function()
+    -- One explicit action at a time. No chained chapter automation or kill/TP loop.
+    local alive, busy, generation = true, false, 0
+    local useTeleport = true
+    local frozenSpider = nil
+    local freezeAccumulator = 0
+
+    local function notify(title, message)
+        smallNotify(title, message, NEVOIRS_UI_ICON)
+    end
+
+    local function objectCFrame(obj)
+        if not obj or not obj.Parent then return nil end
+        if obj:IsA("BasePart") then return obj.CFrame end
+        if obj:IsA("Model") then
+            local ok, cf = pcall(function() return obj:GetPivot() end)
+            if ok then return cf end
+        end
+        local root = rootOf(obj)
+        return root and root.CFrame or nil
+    end
+
+    local function restoreSpider(announce)
+        local saved = frozenSpider
+        frozenSpider = nil
+        if saved then
+            local restored = false
+            local ok = pcall(function()
+                if saved.parent.Parent and saved.bone.Parent == nil then
+                    saved.bone.Parent = saved.parent
+                    restored = true
+                end
+            end)
+            if announce then
+                notify("Spider", ok and restored and "Đã khôi phục rig local còn tồn tại." or "Rig đã đổi; không thể khôi phục bản cũ.")
+            end
+        elseif announce then
+            notify("Spider", "Không có rig local đang tạm giữ.")
+        end
+    end
+
+    local function validContext(ctx, target)
+        if not alive or generation ~= ctx.generation or getChar() ~= ctx.character then return false end
+        if not ctx.root.Parent or getHRP(ctx.character) ~= ctx.root then return false end
+        local hum = ctx.character:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health <= 0 then return false end
+        if ctx.section and (not ctx.section.Parent or Workspace:FindFirstChild(ctx.section.Name) ~= ctx.section) then return false end
+        if target and (not target.Parent or not target:IsDescendantOf(Workspace)) then return false end
+        return true
+    end
+
+    local function waitContext(ctx, duration, target)
+        local deadline = os.clock() + duration
+        repeat
+            if not validContext(ctx, target) then return false end
+            local remaining = deadline - os.clock()
+            if remaining <= 0 then return true end
+            task.wait(math.min(0.05, remaining))
+        until false
+    end
+
+    local function runAction(title, sectionName, callback)
+        if not alive then return end
+        if busy then return notify(title, "Một thao tác đang chạy; chờ hoặc bấm Hủy thao tác Main.") end
+        local character = getChar()
+        local root = getHRP(character)
+        local section = sectionName and safeFolder({sectionName}) or nil
+        if not root or (sectionName and not section) then
+            return notify(title, "Chưa có nhân vật hoặc khu nhiệm vụ chưa được tải.")
+        end
+        busy = true
+        local ctx = {character = character, root = root, section = section, generation = generation, title = title}
+        local ok, err = xpcall(function()
+            if validContext(ctx) then callback(ctx) end
+        end, function(e) return debug.traceback(tostring(e), 2) end)
+        if generation == ctx.generation then busy = false end
+        if not ok then
+            warn("[Nevoirs] Main action:", title, err)
+            notify(title, "Thao tác gặp lỗi; chưa xác nhận hoàn tất.")
+        end
+    end
+
+    local function moveTo(ctx, cf, target)
+        if typeof(cf) ~= "CFrame" or not validContext(ctx, target) then return false end
+        local ok = pcall(function()
+            ctx.root.AssemblyLinearVelocity = Vector3.zero
+            ctx.root.AssemblyAngularVelocity = Vector3.zero
+            ctx.root.CFrame = cf
+        end)
+        if not ok or not waitContext(ctx, 0.15, target) then return false end
+        if (ctx.root.Position - cf.Position).Magnitude > 10 then
+            notify(ctx.title, "Vị trí chưa ổn định; đã dừng trước khi tương tác.")
+            return false
+        end
+        return true
+    end
+
+    local function promptEligible(prompt)
+        return prompt and prompt.Parent and prompt:IsA("ProximityPrompt") and prompt.Enabled
+            and prompt:IsDescendantOf(Workspace) and validPart(promptAnchor(prompt))
+    end
+
+    local function promptFinished(prompt, target)
+        return not target.Parent or not prompt.Parent or not prompt:IsDescendantOf(Workspace) or not prompt.Enabled
+    end
+
+    local function interactOne(ctx, prompt, target)
+        target = target or (prompt and prompt.Parent)
+        if not validContext(ctx, target) or not promptEligible(prompt) then
+            return notify(ctx.title, "Chưa có tương tác hợp lệ ở tiến độ hiện tại.")
+        end
+        local anchor = promptAnchor(prompt)
+        if useTeleport and not moveTo(ctx, anchor.CFrame + Vector3.new(0, 1.5, 0), target) then return end
+        if not validContext(ctx, target) or not promptEligible(prompt) then return end
+        if not useTeleport and (ctx.root.Position - anchor.Position).Magnitude > prompt.MaxActivationDistance + 2 then
+            return notify(ctx.title, "Đang ngoài tầm tương tác; tới gần hoặc bật TP tới mục tiêu.")
+        end
+        if type(fireproximityprompt) ~= "function" then
+            return notify(ctx.title, "Executor chưa cung cấp fireproximityprompt.")
+        end
+        -- Retry another signature only on a client call error, never send all signatures.
+        local duration = math.max(0, tonumber(prompt.HoldDuration) or 0)
+        local ok, err = pcall(fireproximityprompt, prompt, duration)
+        if not ok and validContext(ctx, target) and promptEligible(prompt) then
+            ok, err = pcall(fireproximityprompt, prompt)
+        end
+        if not ok then
+            warn("[Nevoirs] Prompt action:", err)
+            return notify(ctx.title, "Không gửi được tương tác; chưa xác nhận hoàn tất.")
+        end
+        local deadline = os.clock() + 1.8
+        repeat
+            if not validContext(ctx) then return end
+            if promptFinished(prompt, target) then
+                return notify(ctx.title, "Tương tác đã đổi trạng thái. Kiểm tra tiến độ trong game.")
+            end
+            if not waitContext(ctx, 0.08) then return end
+        until os.clock() >= deadline
+        notify(ctx.title, "Đã gửi tương tác cho 1 mục; chưa thấy xác nhận hoàn tất.")
+    end
+
+    local function pathPrompt(path)
+        local obj = safeFolder(path)
+        if obj and obj:IsA("ProximityPrompt") then return obj end
+        return obj and obj:FindFirstChildWhichIsA("ProximityPrompt", true) or nil
+    end
+
+    local function selectPrompt(folder, accept)
+        local best, distance = nil, math.huge
+        if not folder then return nil end
+        for _, obj in ipairs(folder:GetChildren()) do
+            if not accept or accept(obj) then
+                local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if promptEligible(prompt) then
+                    local d = getDistance(promptAnchor(prompt))
+                    if d < distance then best, distance = {prompt = prompt, target = obj}, d end
                 end
             end
         end
         return best
     end
-    local function globalEnv()
-        local ok, env = pcall(function() return getgenv() end)
-        return ok and type(env) == "table" and env or _G
-    end
-    local lastHookAttempt = -10
-    local function installHook()
-        if os.clock() - lastHookAttempt < 3 then return NK.Hook end
-        lastHookAttempt = os.clock()
-        local env = globalEnv()
-        local store = rawget(env, "__SlateNearbyPacketHookV1")
-        if type(store) ~= "table" then
-            store = { Records = setmetatable({}, weak), Owner = nil, Replica = nil, Workspace = Workspace }
-            rawset(env, "__SlateNearbyPacketHookV1", store)
-        end
-        hookStore = store
-        local modules = ReplicatedStorage:FindFirstChild("modules")
-        local packetModule = modules and modules:FindFirstChild("Packet")
-        if not packetModule then NK.Hook = false; return false end
-        local ok, installed = pcall(function()
-            local packet = require(packetModule)
-            local updateState = packet.unreliablesend.ReplicationService.Character.updateState
-            local mt = getmetatable(updateState)
-            if type(mt) ~= "table" or type(mt.__call) ~= "function" then return false end
-            local targetFunction = mt.__call
-            if store.Records[targetFunction] then return true end
-            local hookFn = rawget(env, "hookfunction") or hookfunction
-            if type(hookFn) ~= "function" then return false end
-            local closureFn = rawget(env, "newcclosure") or newcclosure or function(fn) return fn end
-            local old
-            old = hookFn(targetFunction, closureFn(function(...)
-                local replica, camera = store.Replica, store.Workspace.CurrentCamera
-                if store.Owner and replica and camera then
-                    local args = table.pack(...)
-                    local nameOk, name = pcall(function() return args[1].__name end)
-                    if nameOk and name == "updateState" then
-                        local direction = replica.Position - camera.CFrame.Position
-                        if direction.Magnitude > 0.001 then
-                            args[2] = CFrame.lookAt(camera.CFrame.Position, replica.Position)
-                            return old(table.unpack(args, 1, args.n))
-                        end
-                    end
-                end
-                return old(...)
-            end))
-            store.Records[targetFunction] = true
-            return true
+
+    local function promptAction(title, sectionName, path)
+        runAction(title, sectionName, function(ctx)
+            interactOne(ctx, pathPrompt(path))
         end)
-        NK.Hook = ok and installed == true
-        return NK.Hook
     end
-    local function clearReplica()
-        if hookStore and hookStore.Owner == owner then hookStore.Owner, hookStore.Replica = nil, nil end
-    end
-    local function stopNearby()
-        NK.Running, NK.Target, NK.State = false, nil, "idle"
-        NK.Detail = "Đã dừng; camera replica đã nhả."
-        nearbyGeneration = nearbyGeneration + 1
-        clearReplica()
-        if nearbyToggle and nearbyToggle.Set then pcall(function() nearbyToggle:Set(false, true) end) end
-        refresh(true)
-    end
-    local function startNearby()
-        if NK.Running or not valid() then return end
-        if ctx.Scope ~= "Book3" or game.PlaceId ~= FOREST then return notify("Nearby Kill", "Tính năng này dành cho Book 3 Chapter 1.") end
-        NK.Running, NK.State, NK.Sent = true, "active", 0
-        NK.Detail = "Đang tìm mục tiêu hợp lệ; ưu tiên tâm camera."
-        nearbyGeneration = nearbyGeneration + 1
-        local generation = nearbyGeneration
-        task.spawn(function()
-            local gunAction, nextRemoteScan = nil, 0
-            local ok, err = xpcall(function()
-                while valid() and NK.Running and generation == nearbyGeneration do
-                    local now = os.clock()
-                    if now >= nextRemoteScan or (gunAction and not gunAction.Parent) then
-                        gunAction, nextRemoteScan = remoteNamed("GunAction"), now + 2
-                        installHook()
-                    end
-                    if not valid() or not NK.Running or generation ~= nearbyGeneration then break end
-                    local target = NK.Target
-                    if not refreshTarget(target) or now - target.lockedAt > 1.35 then target = chooseTarget(); NK.Target = target end
-                    if target and gunAction and gunAction.Parent then
-                        if hookStore and NK.Hook then hookStore.Owner, hookStore.Replica = owner, target.cframe end
-                        if not target.remotes or now - target.remotesAt >= 0.35 then
-                            target.remotes = remotesIn((target.kind == "Spider" or target.kind == "FleshBlock") and target.anchor or target.instance)
-                            target.remotesAt = now
-                        end
-                        local sent = 0
-                        if pcall(function() gunAction:FireServer("fire") end) then sent = sent + 1 end
-                        for index, remote in ipairs(target.remotes) do
-                            if index > 8 then break end
-                            if remote.Parent and pcall(function() remote:FireServer() end) then sent = sent + 1 end
-                        end
-                        NK.Sent = NK.Sent + sent
-                        NK.State, NK.Detail = sent > 0 and "active" or "error", sent > 0 and "Đã gửi yêu cầu; chưa xác nhận hạ mục tiêu." or "Remote từ chối / đã đổi; đang dò lại."
-                        if sent == 0 then gunAction = nil; nextRemoteScan = 0 end
-                        refresh()
-                        task.wait(math.clamp(nkOptions.FireDelay, 0.01, 10))
-                    else
-                        clearReplica()
-                        NK.State = gunAction and "active" or "error"
-                        NK.Detail = not gunAction and "Chưa thấy GunAction; tự dò lại mỗi 2 giây." or "Không có mục tiêu hợp lệ trong tầm / bộ lọc hiện tại."
-                        refresh()
-                        task.wait(0.25)
-                    end
-                end
-            end, function(message) return debug.traceback(tostring(message), 2) end)
-            if generation == nearbyGeneration then
-                NK.Running, NK.Target = false, nil
-                clearReplica()
-                if not ok then NK.State, NK.Detail = "error", "Nearby Kill đã dừng do lỗi: " .. tostring(err); notify("Nearby Kill", NK.Detail) end
-                refresh(true)
+
+    local function pointAction(title, sectionName, cf, target)
+        runAction(title, sectionName, function(ctx)
+            local dest = type(cf) == "function" and cf() or cf
+            if typeof(dest) ~= "CFrame" then return notify(title, "Chưa tìm thấy điểm đến trong khu hiện tại.") end
+            if moveTo(ctx, dest, target) then
+                notify(title, "Đã tới điểm chọn; không tự chạy nhiệm vụ tiếp theo.")
             end
         end)
     end
 
-    on(Workspace.DescendantAdded, function(object)
-        if E.Running and object.Name == "EgaoEventRig" then
-            registerRig(object, true)
-        elseif E.LookActive and lookRig and object:IsA("BasePart") and object:IsDescendantOf(lookRig) then
-            local part, label = targetInRig(lookRig)
-            if part then lookPart, lookLabel = part, label end
-        end
-    end)
-    on(TeleportService.TeleportInitFailed, function(player, result, message)
-        if player ~= Player or not E.Running or not (E.PendingTeleport or E.PendingSave) then return end
-        local resultName = typeof(result) == "EnumItem" and result.Name or tostring(result)
-        E.LastReason = "TeleportInitFailed: " .. resultName
-        setEgao(E.PendingTeleport and "returning" or "lobby", resultName .. " · " .. tostring(message or "") .. " · đang dùng lượt thử còn lại.", "error", E.LastReason)
-    end)
-
-    function api.BuildTabs(window, chapter)
-        if built or not valid() then return end
-        built = true
-        local applicable = game.PlaceId == LOBBY or game.PlaceId == FOREST or chapter == "B3C1"
-        if not applicable then return end
-        local tab = window:Tab({ Title = "Egao", Icon = "smile" })
-        local function optionsChanged()
-            save()
-            if E.Running then environment() else clearEnvironment() end
-            if E.Running and E.Queued then
-                if not queueSelf(E.LastReason) then pause("Không cập nhật được tùy chọn trong hàng chờ. Kiểm tra khả năng tiếp tục sau teleport rồi bật lại.") end
-            end
-            refresh(true)
-        end
-        tab:Section({ Title = "FOREST EVENT", Icon = "sparkles" })
-        if tab.Status then
-            egaoCard = tab:Status({ Title = "EGAO / FOREST", Subtitle = E.Detail, State = "idle", Fields = { Phase = "Sẵn sàng", Hops = tostring(E.Hops), Time = "00:00:00", Ping = "—", Pulse = "—", Look = "—", Target = "—", Queue = "—", Reason = E.LastReason } })
-        else egaoCard = window:Status({ Title = "EGAO / FOREST", Subtitle = E.Detail, Fields = {} }) end
-        egaoToggle = tab:Toggle({ Title = "Auto Find Egao", Desc = "Lobby → Save 1 / Forest → kiểm tra tín hiệu → quay Lobby nếu chưa có.", Value = false, Callback = function(value) if value then startEgao(false) else stopEgao("Dừng thủ công", false) end end })
-        tab:Toggle({ Title = "Auto Look", Desc = "Nhìn mặt Egao sau 1 giây ổn định; nhả camera sau 62 giây.", Value = options.AutoLook, Callback = function(value)
-            options.AutoLook = value
-            if not value then stopLook("Tắt Auto Look") elseif E.Running and E.Found then startLook("Bật Auto Look thủ công") end
-            optionsChanged()
-        end })
-        tab:Toggle({ Title = "Fullbright khi tìm Egao", Value = options.FullBright, Callback = function(value) options.FullBright = value; optionsChanged() end })
-        tab:Toggle({ Title = "No Fog khi tìm Egao", Desc = "Chỉ bỏ sương / Atmosphere; giữ các hiệu ứng màn hình khác.", Value = options.NoFog, Callback = function(value) options.NoFog = value; optionsChanged() end })
-        if window.FloatingStatus then
-            floatingCard = window:FloatingStatus({ Title = "EGAO", Subtitle = E.Detail, Fields = {}, Visible = false })
-            tab:Toggle({ Title = "Thanh trạng thái nổi", Value = options.Floating, Callback = function(value) options.Floating = value; optionsChanged() end })
-        end
-        tab:Button({ Title = "Dừng tìm kiếm", Icon = "square", Callback = function() stopEgao("Dừng thủ công", false) end })
-        tab:Paragraph({ Title = "Save 1 và tiếp tục sau teleport", Desc = "Luồng theo egao.txt mới: gọi MimicSaveSync(0, 1). Save 1 phải ở Forest. Cần executor hỗ trợ tiếp tục sau teleport; script sẽ tạm dừng nếu chưa thể xếp hàng chạy tiếp." })
-        if ctx.Scope == "Book3" and (game.PlaceId == FOREST or chapter == "B3C1") then
-            local near = window:Tab({ Title = "Nearby", Icon = "crosshair" })
-            near:Section({ Title = "NEARBY KILL", Icon = "focus" })
-            nearbyCard = near.Status and near:Status({ Title = "NEARBY / TARGET", Subtitle = NK.Detail, State = "idle", Fields = { Target = "—", Kind = "—", Range = "—", Packet = "Chưa hook", Sent = "0", Confirm = "Chưa có xác nhận server" } }) or nil
-            nearbyToggle = near:Toggle({ Title = "Nearby Kill", Desc = "Gata, Grunt, Muki, Hogo, FleshBlock, Spider trong tầm. Không teleport.", Value = false, Callback = function(value) if value then startNearby() else stopNearby() end end })
-            for _, spec in ipairs({
-                { "CreepRange", "Tầm Gata / Grunt / Muki", 500 }, { "HogoRange", "Tầm HogoGuntai", 250 },
-                { "FleshRange", "Tầm FleshBlock", 150 }, { "SpiderRange", "Tầm AkariSpider", 150 },
-            }) do
-                local key = spec[1]
-                near:Slider({ Title = spec[2], Desc = "studs", Step = 1, Value = { Min = 0, Max = spec[3], Default = nkOptions[key] }, Callback = function(value) nkOptions[key] = tonumber(value) or nkDefaults[key]; save() end })
-            end
-            near:Slider({ Title = "Khoảng nghỉ bắn", Desc = "giây", Step = 0.01, Value = { Min = 0.01, Max = 1, Default = nkOptions.FireDelay }, Callback = function(value) nkOptions.FireDelay = tonumber(value) or 0.03; save() end })
-            near:Section({ Title = "BỘ LỌC MỤC TIÊU", Icon = "filter" })
-            for _, kind in ipairs({ "Gata", "Grunt", "Muki", "Hogo", "FleshBlock", "Spider" }) do
-                local key = kind
-                near:Toggle({ Title = kind, Value = nkOptions.Filters[key], Callback = function(value) nkOptions.Filters[key] = value; save() end })
-            end
-            near:Paragraph({ Title = "FleshBlock / phản hồi server", Desc = "FleshBlock chỉ hợp lệ khi camera đang nhìn đúng body / block. Chỉ gửi remote dưới body, không mở rộng lên parent. Số yêu cầu đã gửi không đồng nghĩa với số quái đã hạ." })
-        end
-        refresh(true)
-        -- Queued startup is deferred so a newer queued cancellation can replace the session first.
-        task.defer(function()
-            if valid() and type(ctx.QueueInfo) == "table" and ctx.QueueInfo.Egao == true then startEgao(true) end
-        end)
-    end
-    api.StartEgao = function() startEgao(false) end
-    api.StopEgao = function() stopEgao("Dừng thủ công", false) end
-    api.StopAll = function()
-        stopEgao("Dừng mọi tác vụ", false)
-        stopNearby()
-        syncToggle(false)
-    end
-    api.GetStatus = function() return E, NK end
-    function api.Destroy()
-        if not alive then return end
-        stopEgao("Đã unload Slate", false)
-        stopNearby()
-        alive = false
-        stopLook("Đã unload Slate")
-        clearEnvironment()
-        for _, connection in ipairs(connections) do pcall(function() connection:Disconnect() end) end
-        table.clear(connections)
-        if floatingCard and floatingCard.Destroy then pcall(function() floatingCard:Destroy() end) end
-        -- The singleton packet hook stays installed as a pass-through; it keeps no runtime callback.
-        clearReplica()
-    end
-    if ctx.addCleanup then ctx.addCleanup(api.Destroy) end
-    return api
-end
-
-end
-
-Modules.Legacy = function(GG)
--- Slate / Book3: extracted from user-supplied TheMimicV3.D11.
--- Generated by tools/extract_legacy.py. Runtime and UI are injected by the bootstrap.
-local GG = assert(GG, "Slate bootstrap context is required");
-
-local QUEUE_INFO = GG.QUEUE_INFO or {};
-local ScriptCache = GG.ScriptCache;
-local LoaderSettings = GG.LoaderSettings;
-local userIdentify = ScriptCache.userIdentify;
-local LowerC = hookfunction or hookfunc;
-local GetService = game.GetService;
-local Instancen = Instance.new;
-local Vec3 = Vector3.new;
-local str = string;
-local tble = table;
-local Col3 = Color3;
-local tk = GG.Task or task;
-
-local TeleportService = GetService(game, "TeleportService");
-local R = GetService(game, "ReplicatedStorage");
-local H = GetService(game, "RunService");
-local W = GetService(game, "Workspace");
-local P = GetService(game, "Players");
-local S = GetService(game, "Stats");
-
-local IsA = game.IsA;
-local twait = tk.wait;
-local CFr = CFrame.new;
-local Vec3 = Vector3.new;
-local PivotTo = W.PivotTo;
-local mfloor = math.floor;
-local tblef = tble.find;
-local strfind = str.find;
-local tblein = tble.insert;
-local GetPivot = W.GetPivot;
-local GetChildren = game.GetChildren;
-local GetAttribute = game.GetAttribute;
-local WaitForChild = game.WaitForChild;
-local GetDescendants = game.GetDescendants;
-local FindFirstChild = game.FindFirstChild;
-local PropChangeSignal = game.GetPropertyChangedSignal;
-local FindFirstChildOfClass = game.FindFirstChildOfClass;
-local FindFirstChildWhichIsA = game.FindFirstChildWhichIsA;
-local GetAttributeChangedSignal = game.GetAttributeChangedSignal;
-
-local VEC3 = Vec3(3,3,3);
-local VEC2 = Vec3(2,2,2);
-local VEC252 = Vec3(2,5,2);
-local VEC10 = Vec3(10, 10, 10);
-local CFR9E9 = CFr(0, 9e9, 0);
-local RED = Col3.fromRGB(255, 0, 0);
-local BLUE = Col3.fromRGB(0, 0, 255);
-local GREEN = Col3.fromRGB(0, 255, 0);
-local YELLOW = Col3.fromRGB(255, 255, 0);
-local WHITE = Col3.fromRGB(255, 255, 255);
-local PURPLE = Col3.fromRGB(77, 23, 129);
-local DIM0010 = UDim2.new(0,0,1,0);
-local EMPTY_OBJECT = {Parent=nil, SeatPart=nil};
-local PERSISTENT = Enum.ModelStreamingMode.Persistent;
-
-local HUGE99 = 30;
-
-local PlaceId = game.PlaceId;
-
-local ScriptData = {Sections = {}};
-local Config = GG.Configs or {};
-
-Config.Client = Config.Client or {};
-Config.Client.Client = Config.Client.Client or {};
-Config.Yen = Config.Yen or {};
-Config.B3C1 = Config.B3C1 or {};
-Config.B3C1.City = Config.B3C1.City or {};
-Config.B3C1.City.ESP = Config.B3C1.City.ESP or {};
-Config.B3C1.School = Config.B3C1.School or {};
-Config.B3C1.School.ESP = Config.B3C1.School.ESP or {};
-Config.B3C1.Forest = Config.B3C1.Forest or {};
-Config.B3C1.Forest.ESP = Config.B3C1.Forest.ESP or {};
-Config.B3C1.IJO = Config.B3C1.IJO or {};
-Config.B3C1.IJO.ESP = Config.B3C1.IJO.ESP or {};
-Config.B3C1.Water = Config.B3C1.Water or {};
-Config.B3C1.Water.ESP = Config.B3C1.Water.ESP or {};
-
-return {
-    Version = "TheMimicV3.D11";
-    Function = function(CorePackage, WindLib, IntroLib, Windy, ClientPackage, CoruTask, CommonF, ESPF, PromptPackage, DownloadPackage, QueuePack)
-        local CoreConnection    = {};
-        local CoreDestroyed     = false;
-        local ForceFloat        = "None";
-
-        local Cam               = W.CurrentCamera;
-        local selff             = P.LocalPlayer;
-        local PSG               = selff.PlayerGui;
-        local BP                = selff.Backpack or EMPTY_OBJECT;
-        local selc              = selff.Character or EMPTY_OBJECT;
-        local HumSelf           = selc.Parent and FindFirstChildOfClass(selc, "Humanoid") or EMPTY_OBJECT;
-        local HumRSelf          = HumSelf.RootPart or EMPTY_OBJECT;
-        local PSS               = WaitForChild(selff, "PlayerScripts", HUGE99);
-
-
-        local ClientCon         = Config.Client.Client;
-        local YenCon            = Config.Yen;
-        local B3C1Con           = Config.B3C1;
-        local ArgsCraft         = {[1] = 0;[2] = {["__args"] = {};["__tree"] = {[1] = "CraftingService";[2] = "Interact"};["__callType"] = 0}};
-
-        local Chapter           = if PlaceId == 6296321810 or PlaceId == 6479231833 or PlaceId == 6301638949 or PlaceId == 6480994221 then "B1C1"
-                                  elseif PlaceId == 6373539583 or PlaceId == 6485055338 or PlaceId == 6406571212 or PlaceId == 6485055836 or PlaceId == 6425178683 or PlaceId == 6485056556 then "B1C2"
-                                  elseif PlaceId == 6472459099 or PlaceId == 6688734180 or PlaceId == 6682163754 or PlaceId == 6688734313 or PlaceId == 6682164423 or PlaceId == 6688734395 then "B1C3"
-                                  elseif PlaceId == 7251865082 or PlaceId == 7265396387 or PlaceId == 7251866503 or PlaceId == 7265396805 or PlaceId == 7251867155 or PlaceId == 7265397072 or PlaceId == 7251867574 or PlaceId == 7265397848 then "B1C4"
-                                  elseif PlaceId == 8056702588 then "B2C1"
-                                  elseif PlaceId == 13489800654 then "B2C2"
-                                  elseif PlaceId == 15962819441 then "B2C3"
-                                  elseif PlaceId == 96354063422506 then "B2C4"
-                                  elseif PlaceId == 128715637193371 then "B3C1"
-                                  elseif PlaceId == 7618863566 then "Jigoku"
-                                  elseif PlaceId == 7068738088 or PlaceId == 7068951438 or PlaceId == 7068739000 or PlaceId == 7068951914 or PlaceId == 7068740106 or PlaceId == 7068952294 then "WitchTrial"
-                                  elseif PlaceId == 7633631103 or PlaceId == 7633631351 or PlaceId == 7633631511 then "HalloweenTrial"
-                                  elseif PlaceId == 6243699076 then "Lobby"
-                                  elseif PlaceId == 7068737459 then "GLobby"
-                                  else nil;
-
-        local AllowedChapters = {["B3C1"] = true; ["Lobby"] = true};
-        if not Chapter or not AllowedChapters[Chapter] then
-            return function()
-                warn("[Slate / Book3] This place is not supported by this package: " .. tostring(PlaceId));
-                return false, "Unsupported place " .. tostring(PlaceId);
-            end;
-        end;
-
-        local GameAI, GameAI2   = nil, nil;
-
-        local dist              = CommonF.dist;
-        local Tp                = CommonF.Tp;
-        local HumanoidEquip     = CommonF.HumanoidEquip;
-        local Tween             = CommonF.Tween;
-        local Anchored          = CommonF.Anchored;
-        local distOf            = CommonF.distOf;
-
-        local RE                = {};
-        local REQ               = {};
-        local Functions         = {};
-        local WindUI;
-        local PromptConnections = {};
-        local ActionConnections = {};
-        local SignalSubscriptions = setmetatable({}, {__mode = "k"});
-        local function Subscribe(signal, callback, once)
-            local ok, sourceName, sourceLine = pcall(debug.info, callback, "sl");
-            local key = ok and (tostring(sourceName) .. ":" .. tostring(sourceLine)) or tostring(callback);
-            local subscriptions = SignalSubscriptions[signal];
-            if not subscriptions then subscriptions = {}; SignalSubscriptions[signal] = subscriptions; end;
-            local existing = subscriptions[key];
-            if existing and existing.Connected then return existing; end;
-            local function wrapped(...)
-                if CoreDestroyed then return; end;
-                if GG.Dispatch then return GG.Dispatch(callback, ...); end;
-                return callback(...);
-            end;
-            local connection = if once then signal:Once(wrapped) else signal:Connect(wrapped);
-            subscriptions[key] = connection;
-            ActionConnections[#ActionConnections + 1] = connection;
-            return connection;
-        end;
-        local function TrackSignal(signal, callback) return Subscribe(signal, callback, false); end;
-        local function TrackOnce(signal, callback) return Subscribe(signal, callback, true); end;
-        local function StopActions()
-            for _, connection in pairs(ActionConnections) do pcall(function() connection:Disconnect(); end); end;
-            for _, connection in pairs(PromptConnections) do pcall(function() connection:Disconnect(); end); end;
-            table.clear(ActionConnections); table.clear(PromptConnections); table.clear(SignalSubscriptions);
-            ForceFloat = "None";
-            if Functions.FreeCam then pcall(function() Functions:FreeCam(false); end); end;
-            if ClientPackage.UpdatePosition then ClientPackage.UpdatePosition(false, "None", HumRSelf); end;
-        end;
-        local function Cleanup()
-            if CoreDestroyed then return; end;
-            CoreDestroyed = true; ForceFloat = "None";
-            StopActions();
-            for _, connection in pairs(CoreConnection) do pcall(function() connection:Disconnect(); end); end;
-            table.clear(CoreConnection);
-        end;
-        if GG.RegisterCleanup then GG.RegisterCleanup(Cleanup); end;
-
-
-        Functions.PairingSections = function(self, data)
-            if not self.PackSections and data[Chapter] then
-                local PackSections = {Tabs={}};
-                local GroupDat = {};
-                local ActiveMap = {
-                    [6373539583] = 1, [6485055338] = 1, [6406571212] = 2, [6485055836] = 2,
-                    [6425178683] = 3, [6485056556] = 3, [6472459099] = 1, [6688734180] = 1,
-                    [6682163754] = 2, [6688734313] = 2, [6682164423] = 3, [6688734395] = 3,
-                };
-                local WantedMap = ActiveMap[PlaceId];
-
-                for i=1, #data[Chapter] do
-                    if WantedMap and i ~= WantedMap then continue; end;
-                    local sec=data[Chapter][i];
-                    if not sec or not sec.dat then continue; end;
-                    for i2=1, #sec.dat do
-                        tblein(GroupDat, {
-                            type = "Button";
-                            EN = sec.dat[i2].i;
-                            Callback = function()
-                                Tp(HumRSelf, sec.dat[i2].C);
-                            end;
-                        });
-                    end;
-                end;
-                
-                PackSections.Tabs = {{
-                    Tab={at="Section", Title="Sections", Icon="map-pinned", Path=Chapter}, Data=GroupDat
-                }}; self.PackSections = PackSections;
-            end;
-
-            return LoaderSettings.TheMimicLoader.Load_Sections and self.PackSections or {};
-        end;
-
-        Functions.GetPing = function()
-            local ok, ping = pcall(function() return S.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000; end);
-            return ok and ping or 0.1;
-        end;
-
-        Functions.GameValidate = function(self)
-            local function disable(parent, name)
-                local child = parent and FindFirstChild(parent, name);
-                if child and child:IsA("LocalScript") then child.Enabled = false; end;
-            end;
-            if Chapter == "Lobby" then disable(selc, "AntiFly"); end;
-            if Chapter == "B1C4" or Chapter == "WitchTrial" then
-                disable(PSS, "Anti-Fly"); disable(PSS, "Anti-Speed");
-            end;
-            local toolNames = {
-                B1C4 = {"Katana", "Katana"}, B2C3 = {"BoneSword", "Bone Sword"},
-                B2C4 = {"Bow", "SpiritBow"}, B3C1 = {"Gun", "Gun"},
-            };
-            local tool = toolNames[Chapter];
-            if tool then
-                self[tool[1]] = FindFirstChild(BP, tool[2]) or FindFirstChild(selc, tool[2]);
-                if not self[tool[1]] then
-                    tk.defer(function()
-                        local found = WaitForChild(BP, tool[2], 30);
-                        if not CoreDestroyed then self[tool[1]] = found; end;
-                    end);
-                end;
-            end;
-            local QuickTime = FindFirstChild(PSG, "QuickTime");
-            self.GrabbedUI = QuickTime and FindFirstChild(QuickTime, "GrabbedUI");
-            if self.AlreadyInit then return; end;
-            self.AlreadyInit = true;
-            if Chapter == "B2C1" or Chapter == "B2C2" then
-                -- These chapters scramble object names; inspect the same mapping
-                -- as 229, with a finite search and a direct-name fallback.
-                tk.spawn(function()
-                    if type(getgc) ~= "function" then return; end;
-                    local DynamicControl;
-                    local deadline = os.clock() + 20;
-                    repeat
-                        local ok, GCs = pcall(getgc, true);
-                        if not ok then break; end;
-                        for _, value in ipairs(GCs) do
-                            if type(value) == "function" then
-                                local infoOK, name = pcall(debug.info, value, "n");
-                                if infoOK and name == "DynamicControl" then DynamicControl = value; end;
-                            elseif type(value) == "table" and rawget(value, "TakeOver") then
-                                self.TakeOver = value;
-                            end;
-                        end;
-                        if DynamicControl and self.TakeOver then break; end;
-                        twait(0.5);
-                    until CoreDestroyed or os.clock() > deadline;
-                    if CoreDestroyed or not DynamicControl or type(getupvalues) ~= "function" then return; end;
-                    local ok, UPs = pcall(getupvalues, DynamicControl);
-                    if not ok then return; end;
-                    for _, f1 in pairs(UPs) do
-                        if type(f1) == "function" then
-                            local good, UPs2 = pcall(getupvalues, f1);
-                            if good then
-                                for _, value in pairs(UPs2) do
-                                    if type(value) == "table" and (rawget(value, "Interactable") or rawget(value, "Safe")) then
-                                        self.u18 = value; self.B2C1Cache = {}; return;
-                                    end;
-                                end;
-                            end;
-                        end;
-                    end;
-                end);
-            elseif Chapter == "B2C3" then
-                self.GameMode = GetAttribute(W, "GamemodeMode");
-                CoreConnection[#CoreConnection + 1] = GetAttributeChangedSignal(W, "GamemodeMode"):Connect(function()
-                    self.GameMode = GetAttribute(W, "GamemodeMode");
-                end);
-                self.OneRunHouseClicked = {};
-            elseif Chapter == "B2C4" then
-                self.AnsweredMother = {
-                    ["cult name?"] = "Kiiroibara Cult", ["I bloom"] = "Cherry Blossom",
-                    ["Four I shaped in shadows dire—"] = "Evil God", ["pink"] = " Hiachi Masashige",
-                    ["quietly"] = "Torii Gate", ["pathetic"] = "Me", ["in ink"] = "A brush",
-                    ["Flames"] = "Enzukai", ["guard"] = "A komainu",
-                };
-                tk.spawn(function()
-                    local Section4 = WaitForChild(W, "Section4", 30);
-                    if not Section4 or CoreDestroyed then return; end;
-                    for _, entry in ipairs({{"Tsukiya2", "Monster4"}, {"Tenome2", "Monster3"}, {"Rin2", "Monster2"}}) do
-                        tk.spawn(function()
-                            local folder = WaitForChild(Section4, entry[2], 30);
-                            local monster = folder and WaitForChild(folder, entry[1], 30);
-                            if not CoreDestroyed then self[entry[1]] = monster; end;
-                        end);
-                    end;
-                end);
-            end;
-        end;
-
-        Functions.FreeCam = function(self, isFree)
-            Cam = W.CurrentCamera;
-            if isFree and not self.FreeCamSaved then
-                self.FreeCamSaved = {Camera = Cam, Type = Cam.CameraType, Subject = Cam.CameraSubject, CFrame = Cam.CFrame};
-            end;
-            if self.TakeOver then pcall(function() self.TakeOver:TakeOver(not isFree); end); end;
-            if isFree and Chapter == "B2C1" then Cam.CameraType = Enum.CameraType.Scriptable; end;
-            if not isFree and self.FreeCamSaved then
-                local saved = self.FreeCamSaved; self.FreeCamSaved = nil;
-                pcall(function()
-                    saved.Camera.CameraType = saved.Type;
-                    saved.Camera.CameraSubject = saved.Subject;
-                    saved.Camera.CFrame = saved.CFrame;
-                end);
-            end;
-        end;
-
-        Functions.FreeYourself = function(self)
-            if not self.GrabbedUI or not self.GrabbedUI.Visible then
-                return;
-            end; CommonF:CKey(Enum.KeyCode.E, 0.03);
-        end;
-
-        Functions.FirePrompt = function(self, args)
-            local Prompt, EndAt, LookAt = args.Prompt, args.EndAt, args.LookAt;
-            if not Prompt or not EndAt or not HumRSelf.Parent then return; end;
-            local Max, LineOfSight = Prompt.MaxActivationDistance, Prompt.RequiresLineOfSight;
-            local camera = W.CurrentCamera;
-            local CameraType, CameraSubject, CameraCFrame = camera.CameraType, camera.CameraSubject, camera.CFrame;
-            local ok, failure = pcall(function()
-                Prompt.MaxActivationDistance = 250;
-                Prompt.RequiresLineOfSight = false;
-                self:FreeCam(true);
-                if LookAt then camera.CFrame = CFr(EndAt.Position, LookAt); end;
-                Tp(HumRSelf, EndAt, 0.3);
-                Prompt:InputHoldBegin(); H.RenderStepped:Wait();
-                if args.Safe then Tp(HumRSelf, args.Safe); end;
-                local duration = math.max(0, Prompt.HoldDuration);
-                tk.delay(math.max(0, duration - 0.2), function()
-                    if not CoreDestroyed and HumRSelf.Parent then Tp(HumRSelf, EndAt); end;
-                end);
-                twait(duration); Prompt:InputHoldEnd(); twait(0.1);
-            end);
-            pcall(function() Prompt:InputHoldEnd(); Prompt.MaxActivationDistance = Max; Prompt.RequiresLineOfSight = LineOfSight; end);
-            pcall(function() self:FreeCam(false); end);
-            if camera.Parent then
-                camera.CameraType, camera.CameraSubject, camera.CFrame = CameraType, CameraSubject, CameraCFrame;
-            end;
-            if not ok then error(failure, 0); end;
-        end;
-
-        Functions.ToolNow = function(self, index)
-            if not selc.Parent then return false; end;
-            local Tool = self[index];
-            if not Tool or not Tool.Parent then
-                local toolNames = {Gun = "Gun", Katana = "Katana", Bow = "SpiritBow", Cutlass = "Cutlass", BoneSword = "Bone Sword"};
-                local name = toolNames[index] or index;
-                Tool = FindFirstChild(BP, name) or FindFirstChild(selc, name); self[index] = Tool;
-            end;
-            if Tool and Tool.Parent ~= selc then
-                HumanoidEquip(HumSelf, Tool);
-            elseif not Tool then
-                return false;
-            end; return Tool;
-        end;
-
-        Functions.ToolActive = function(self, index)
-            local Tool = self:ToolNow(index); if Tool then
-                return Tool:Activate();
-            end; return;
-        end;
-
-        Functions.B3C1Func = function(self, where)
-            if where == "City/Kill" then
-                local CHs=GetChildren(W.Section1.Grunts); for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent and v.ClassName == "Model" then
-                        local sRE = FindFirstChild(v, "RemoteEvent");
-                        if not sRE then continue; end;
-                        while v.Parent and sRE.Parent and not CoreDestroyed do
-                            if self:ToolNow("Gun") then
-                                local Pivot = GetPivot(v);
-                                Tp(HumRSelf, Pivot*CFr(0, 40, 0));
-                                R.GunAction:FireServer("fire");
-                                sRE:FireServer();
-                            end; twait();
-                        end;
-                    end;
-                end;
-            elseif where == "City/Body" then
-                local Bodies = GetChildren(W.Section1.DeadCivilians); for i=1, #Bodies do
-                    local v = Bodies[i]; if v.Parent then
-                        local Prox = FindFirstChild(v, "HumanoidRootPart");
-                        Prox = Prox and FindFirstChild(Prox, "ProximityPrompt");
-                        if Prox then
-                            Tp(HumRSelf, Prox.Parent.CFrame, 0.3);
-                            fireproximityprompt(Prox);
-                        end;
-                    end;
-                end; return Tp(HumRSelf, CFr(81, 9.3, 224));
-            elseif where == "City/Mika" then
-                Tp(HumRSelf, W.Section1.Monster.Trigger.CFrame);
-            elseif where == "City/Hideo" then
-                Tp(HumRSelf, GetPivot(W.Section1.HideoScene.Hideo2));
-            elseif where == "City/Cutter" then
-                local Prox = W.Section1.SchoolGatePart.Truck.BoltCutter.Main.ProximityPrompt;
-                Tp(HumRSelf, Prox.Parent.CFrame); fireproximityprompt(Prox);
-            elseif where == "City/Cut" then
-                local Prox = W.Section1.SchoolGatePart.Gate.Chain.PromptPart.ProximityPrompt;
-                Tp(HumRSelf, Prox.Parent.CFrame, 0.3); for i=1, 4 do
-                    fireproximityprompt(Prox);
-                end;
-            elseif where == "School/Med" then
-                fireproximityprompt(W.Section2.Items.Bandage.Handle.ProximityPrompt);
-            elseif where == "School/Heal" then
-                local sRE = R.modules.Packet.Reliable;
-                sRE:FireServer("Section2/HideoMinigameStarted");
-                sRE:FireServer("Section2/HideoHealed");
-                return sRE:FireServer("Section2/HideoMinigameEnded");
-            elseif where == "School/Note" then
-                Tp(HumRSelf, CFr(142, 20, 504), 0.3);
-                fireproximityprompt(W.Section2.MAINOBJECTIVE.Locker.LockerDoor.ProximityPart.ProximityPrompt);
-                Tp(HumRSelf, CFr(142, 20, 504), 0.3);
-                fireproximityprompt(W.Section2.MAINOBJECTIVE.Diary.ProximityPrompt, 0.3);
-            elseif where == "School/Freeze" then
-                local CHs = GetChildren(W.Section2.MAINOBJECTIVE2.Spiders); for i=1, #CHs do
-                    local v=CHs[i]; if v.Name ~= "AkariSpider" then continue; end;
-                    local RootPart = FindFirstChild(v, "RootPart");
-                    if not RootPart then continue; end;
-
-                    local Bones = FindFirstChild(RootPart, "Bone");
-                    if not Bones then continue; end;
-                    Bones:Destroy();
-                end;
-            elseif where == "School/Spider" then
-                local CHs = GetChildren(W.Section2.MAINOBJECTIVE2.Spiders); for i=1, #CHs do
-                    local v=CHs[i]; if v.Name ~= "AkariSpider" then continue; end;
-                    local Hitbox = FindFirstChild(v, "Hitbox");
-                    if not Hitbox then continue; end;
-                    local sRE = FindFirstChild(Hitbox, "RemoteEvent");
-                    if not sRE then continue; end;
-
-                    local Akari = FindFirstChild(W.Section2.Monster, "AkariNM") or FindFirstChild(W.Section2.Monster, "Akari");
-                    Akari = Akari or FindFirstChild(W.Section2.Rage, "AkariRageNM", true) or FindFirstChild(W.Section2.Rage, "AkariRage", true);
-                    if not Akari or not Akari.Parent then return; end;
-                    
-                    if distOf(Akari.Hitbox, HumRSelf, 60) then continue; end;
-
-                    Tp(HumRSelf, Hitbox.CFrame, 0.3);
-
-                    for ri=1, 50 do
-                        if not Hitbox.Parent or not sRE.Parent then
-                            break;
-                        end;
-
-                        if distOf(Akari.Hitbox, HumRSelf, 60) then
-                            Tp(HumRSelf, CFr(142, 20, 504)); break;
-                        end;
-
-                        if self:ToolNow("Gun") then
-                            R.GunAction:FireServer("fire");
-                            sRE:FireServer(); twait();
-                        end;
-                    end;
-                end;
-            elseif where == "School/Exit" then
-                Tp(HumRSelf, CFr(175, 8, 508), 0.3);
-                fireproximityprompt(W.Section2.School.Doors.ExitDoor.ProxPart.ProximityPrompt);
-            elseif where == "School/Forest" then
-                Tp(HumRSelf, CFr(-197, 50, 338));
-            elseif where == "Forest/Cave" then
-                Tp(HumRSelf, W.Section3.Trigger.CFrame, 1);
-                Tp(HumRSelf, W.Section3.OBJECTIVE.Trigger2.CFrame);
-            elseif where == "Forest/Generator" then
-                local CHs = GetChildren(W.Section3.OBJECTIVE.Circuits); for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent and v.Name == "CircuitPillar" then
-                        v.CollisionPart.CanCollide = false;
-                        Tp(HumRSelf, v.CollisionPart.CFrame, 0.3);
-                        fireproximityprompt(v.PromptPart.ProximityPrompt);
-                        for i=1, 3 do
-                            if GetAttribute(v, "CurrentRound") == 4 then
-                                return;
-                            end; R.modules.Packet.Reliable:FireServer(
-                                "Section3/CircuitRoundComplete",
-                                v
-                            );
-                        end;
-                    end;
-                end;
-            elseif where == "IJO/Keycard" then
-                local Prompt = W.Section4.Lab.Floor1.Entrance.IDCARD.ProximityPrompt;
-                Tp(HumRSelf, Prompt.Parent.CFrame, 0.3); fireproximityprompt(Prompt);
-            elseif where == "IJO/PASS" then
-                R.modules.Packet.Unreliable:FireServer(
-                    "Section4/LaptopSubmit",
-                    W.Section4.Lab.Floor1.Objective.StickyNote.PASSWORD.SurfaceGui.RandomNumber.Text
-                );
-            elseif where == "IJO/C4" then
-                local CHs=GetChildren(W.Section4.Lab.Floor1.Objective2.C4Explode); for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent and v.Name == "C4Bomb" then
-                        local Prox = FindFirstChild(v, "ProximityPrompt");
-                        if not Prox or not Prox.Enabled then continue; end;
-                        Tp(HumRSelf, v.CFrame, 0.3);
-                        fireproximityprompt(Prox, 1);
-                    end;
-                end;
-            elseif where == "IJO/C4_2" then
-                Tween({primary = HumRSelf; goal = { CFrame = CFr(-4147, 107, 2154) }, info=TweenInfo.new(3)});
-                Tween({primary = HumRSelf; goal = { CFrame = CFr(-4143, 107, 2501) }, info=TweenInfo.new(3)});
-                local CHs = GetChildren(W.Section4.Lab.Floor1.Objective3.C4Explode); for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent and v.Name == "C4Bomb" then
-                        local Prox = FindFirstChild(v, "ProximityPrompt");
-                        if not Prox or not Prox.Enabled then continue; end;
-                        Tp(HumRSelf, v.CFrame, 0.3);
-                        fireproximityprompt(Prox, 1);
-                    end;
-                end;
-            elseif where == "IJO/Exit" then
-                Tp(HumRSelf, CFr(-3379, -300, 4451));
-            elseif where == "IJO/Terminal" then
-                local HogoGuntai = FindFirstChild(W.Section4.Monster, "HogoGuntai");
-                local CHs=GetChildren(W.Section4.Lab.CleanseRoomObjective.ShapeTerminals); for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent and strfind(v.Name, "Terminal") then
-                        local Prox = FindFirstChild(v, "PromptPart");
-                        Prox = Prox and FindFirstChild(Prox, "ProximityPrompt");
-                        if not Prox or not Prox.Enabled then continue; end;
-                        if distOf(HogoGuntai.Hitbox, Prox.Parent, 60) then
-                            continue;
-                        end; Tp(HumRSelf, Prox.Parent.CFrame, 0.3);
-                        fireproximityprompt(Prox); twait(0.3);
-                        Tp(HumRSelf, CFr(-3389, -298, 4390), 1);
-                        R.modules.Packet.Reliable:FireServer(
-                            "ShapeTerminal/RoundComplete",
-                            v
-                        );
-                        R.modules.Packet.Reliable:FireServer(
-                            "ShapeTerminal/Release",
-                            v
-                        );
-                    end;
-                end; Tp(HumRSelf, CFr(-3389, -298, 4390));
-            elseif where == "IJO/Valve" then
-                local HogoGuntai = FindFirstChild(W.Section4.Monster, "HogoGuntai");
-                local CHs=GetChildren(W.Section4.Lab.CleanseRoomObjective.Valves);
-                
-                for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent and v.ClassName == "Model" then
-                        local Icon = v.Notification.Icon;
-                        if not Icon.Enabled then continue; end;
-                        local Chs = GetChildren(v);
-                        while Icon.Enabled do
-                            Tp(HumRSelf, Icon.Parent.CFrame); for i=1, #Chs do
-                                local v2 = Chs[i]; if v2 and v2.Name == "Turners" then
-                                    local Prompt = FindFirstChild(v2, "Right");
-                                    if distOf(HogoGuntai.Hitbox, Prompt.Parent, 60) then
-                                        return Tp(HumRSelf, CFr(-3389, -298, 4390));
-                                    elseif Prompt then
-                                        Tp(HumRSelf, Icon.Parent.CFrame);
-                                        fireproximityprompt(Prompt);
-                                    end;
-                                end;
-                            end;
-                        end;
-                    end;
-                end;
-            elseif where == "IJO/Threat" then
-                R.modules.Packet.Reliable:FireServer("Section4/LockdownSkillCheckHit");
-            elseif where == "Water/Stair" then
-                Tp(HumRSelf, W.Section5.StairsSection.EndTrigger.CFrame);
-            elseif where == "Water/Main" then
-                local MainSwitch = W.Section5.MainObjective.PowerSwitch.RootPart.ProximityPrompt;
-                Tp(HumRSelf, MainSwitch.Parent.CFrame, 0.3);
-                fireproximityprompt(MainSwitch, 1);
-            elseif where == "Water/Wire" then
-                local sRE = R.modules.Packet.Reliable;
-                local CHs = GetChildren(W.Section5.MainObjective.Boxes);
-
-                for i=1, #CHs do
-                    local box=CHs[i]; if box.Parent and box.Name == "WireBox" then
-                        if box.PromptPart.ProximityPrompt.Enabled then
-                            sRE:FireServer("Section5/WireBoxClaim", box);
-                            sRE:FireServer("Section5/WireBoxClaim", box);
-
-                            for _,v in pairs(GetChildren(box.Bolt)) do
-                                if v.Name == "Screw" then
-                                    sRE:FireServer("Section5/WireBoxScrewDone", v);
-                                end;
-                            end; for _,v in pairs(GetChildren(box.Cuttable)) do
-                                if v.Name == "Cut" then
-                                    sRE:FireServer("Section5/WireBoxCutDone", v);
-                                end;
-                            end;
-
-                            sRE:FireServer("Section5/WireBoxComplete", box);
-                        end;
-                    end;
-                end;
-            end;
-        end;
-
-        Functions.B3C1ESP = function(self, where, state)
-            if not state then
-                return ESPF.Visible(where, false);
-            elseif where == "City/Gatas" then
-                local CHs=GetChildren(W.Section1.Grunts); for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent and v.ClassName == "Model" then
-                        ESPF.ESP(where, v, {
-                            Color = RED;
-                            Size = VEC10;
-                            Text = v.Name;
-                        });
-                    end;
-                end;
-            elseif where == "City/Bodies" then
-                local Bodies = GetChildren(W.Section1.DeadCivilians); for i=1, #Bodies do
-                    local v = Bodies[i]; if v.Parent then
-                        local Prox = FindFirstChild(v, "HumanoidRootPart");
-                        Prox = Prox and FindFirstChild(Prox, "ProximityPrompt");
-                        local ESPObject = ESPF.ESP(where, v, {
-                            Color = if Prox then YELLOW else GREEN;
-                            Size = VEC10;
-                            Text = v.Name;
-                        }); if Prox and (not ESPObject.PropChange or not ESPObject.PropChange.Connected) then
-                            ESPObject.PropChange = TrackOnce(Prox.Destroying, function()
-                                ESPObject.UpdateColor(GREEN);
-                            end);
-                        end;
-                    end;
-                end;
-            elseif where == "Akari" then
-                local Akari = FindFirstChild(W.Section2.Monster, "AkariNM") or FindFirstChild(W.Section2.Monster, "Akari");
-                Akari = Akari or FindFirstChild(W.Section2.Rage, "AkariRageNM", true) or FindFirstChild(W.Section2.Rage, "AkariRage", true);
-                if not Akari then return; end; ESPF.ESP(where, Akari, {
-                    Color = RED;
-                    Size = VEC10;
-                    Text = Akari.Name;
-                });
-            elseif where == "Mizuno" then
-                local Mizuno = FindFirstChild(W.Section3.Monster, "Mizuno") or FindFirstChild(W.Section3.Monster, "MizunoNM");
-                if not Mizuno then return; end; ESPF.ESP(where, Mizuno, {
-                    Color = RED;
-                    Size = VEC10;
-                    Text = "Mizuno";
-                });
-            elseif where == "Terminal" then
-                local CHs=GetChildren(W.Section4.Lab.CleanseRoomObjective.ShapeTerminals); for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent and v.Name == "Terminal" then
-                        ESPF.ESP(where, v, {
-                            Color = WHITE;
-                            Size = VEC10;
-                            Text = "Terminal";
-                        });
-                    end;
-                end;
-            elseif where == "BoulderSeal" then
-                ESPF.ESP(where, W.Section4.Lab.Floor1.Objective2.C4Explode.BoulderSeal, {
-                    Color = GREEN;
-                    Size = VEC10;
-                    Text = "Seal";
-                });
-            elseif where == "HogoGuntai" then
-                ESPF.ESP(where, W.Section4.Monster.HogoGuntai, {
-                    Color = RED;
-                    Size = VEC10;
-                    Text = "HogoGuntai";
-                });
-            elseif where == "Baigai" then
-                ESPF.ESP(where, W.Section5.Monster.Baigai, {
-                    Color = RED;
-                    Size = VEC10;
-                    Text = "Baigai";
-                });
-            end; ESPF.Visible(where, true, true);
-        end;
-
-        ScriptData.AutoData = {
-            YenTab = ((Chapter == "B2C2" or Chapter == "B2C3" or Chapter == "B2C4" or Chapter == "B3C1") and {
-                {type="Toggle", EN="Collect All Yen", EN2="Teleport & collect spawned yen", TH1="เก็บเงินทั้งหมด", TH2="วาปไปเก็บเงินทั้งหมดที่เกิดอยู่", Path="Auto"},
-                {type="Toggle", EN="Yen Aura", EN2="Auto collect nearby Yen.", TH1="ออโต้เก็บเงิน", TH2="ออโต้เก็บเงินในระยะ", Path="Aura"},
-                {type="Toggle", EN="ESP Yen", EN2="Show Yen boxes.", TH1="ESP เงิน", TH2="มองเห็นเงิน", Path="ESP"},
-            });
-
-            PackB3C1 = (Chapter == "B3C1" and {
-                Tabs={
-                    {Tab={at="B3C1", Title="City", Icon="book-open", Path="B3C1"}, Data={
-                        {type="Button", EN="Kill All Gatas", EN2="Teleport & fire a shot with client validation.", TH1="ยิง Gatas", TH2="วาปไปยิง Gatas พร้อมการยืนยันจาก Client", Callback=function()
-                            return Functions:B3C1Func("City/Kill");
-                        end};
-                        {type="Button", EN="Interact All Dead Bodies", EN2="Teleport to dead bodies and interact.", TH1="รายงานศพ", TH2="วาปไปรายงานศพ", Callback=function()
-                            return Functions:B3C1Func("City/Body");
-                        end};
-                        {type="Button", EN="Teleport To Mika", EN2="Watch she's gone.", TH1="วาปไปหา Mika", TH2="ไปดูฉากสิ้นหวัง", Callback=function()
-                            return Functions:B3C1Func("City/Mika");
-                        end};
-                        {type="Button", EN="Teleport To Hideo/Door", EN2="Tell Hideo a sad story.", TH1="วาปไปหา Hideo", TH2="ไปเล่าเรื่องราวสิ้นหวัง", Callback=function()
-                            return Functions:B3C1Func("City/Hideo");
-                        end};
-                        {type="Button", EN="Cut The Chains", EN2="Teleport & magically cut the chain.", TH1="ตัดโซ่", TH2="วาปและตัดโซ่แบบงงๆ", Callback=function()
-                            return Functions:B3C1Func("City/Cut");
-                        end}; {type="Space"}; {type="Space"};
-                        {type="Toggle", EN="ESP Gatas", EN2="Show Gatas' hitbox", TH1="ESP Gatas", TH2="มองเห็น Gatas", Path="City/ESP/Gatas", Callback=function(state)
-                            B3C1Con.City.ESP.Gatas = state;
-                            return Functions:B3C1ESP("City/Gatas", state);
-                        end};
-                        {type="Toggle", EN="ESP Dead Bodies", EN2="Show dead bodies", TH1="ESP ศพ", TH2="มองเห็นศพ", Path="City/ESP/Bodies", Callback=function(state)
-                            B3C1Con.City.ESP.Bodies = state;
-                            return Functions:B3C1ESP("City/Bodies", state);
-                        end};
-                    }};
-                    {Tab={at="B3C1", Title="School", Icon="book-open", Path="B3C1"}, Data={
-                        {type="Button", EN="Grab Medical Kit", EN2="Magically grab it.", TH1="หยิบกล่องปฐมพยาบาล", TH2="หยิบกล่องปฐมพยาบาลแบบงงๆ", Callback=function()
-                            return Functions:B3C1Func("School/Med");
-                        end};
-                        {type="Button", EN="Heal Hideo", EN2="Magically teleport to him & heal.", TH1="รักษา Hideo", TH2="วาปไปแบบงงๆแล้วรักษา", Callback=function()
-                            return Functions:B3C1Func("School/Heal");
-                        end};
-                        {type="Button", EN="Read Note", EN2="Teleport & read note.", TH1="อ่านโน๊ต", TH2="วาปไปอ่านโน๊ต", Callback=function()
-                            return Functions:B3C1Func("School/Note");
-                        end};
-                        {type="Button", EN="Freeze Spiders", EN2="Permanently stop spiders from moving.", TH1="หยุดแมงมุม", TH2="ทำให้แมงมุมขยับไม่ได้แบบถาวร", Callback=function()
-                            return Functions:B3C1Func("School/Freeze");
-                        end};
-                        {type="Button", EN="Kill Spiders", EN2="Teleport & kill all spiders", TH1="ฆ่าแมงมุม", TH2="วาปฆ่าแมงมุมทั้งหมด", Callback=function()
-                            return Functions:B3C1Func("School/Spider");
-                        end};
-                        {type="Button", EN="Exit", EN2="Teleport to exit door.", TH1="ออก", TH2="วาปไปที่ประตูทางออก", Callback=function()
-                            return Functions:B3C1Func("School/Exit");
-                        end};
-                        {type="Button", EN="Enter Forest", EN2="Teleport to the forest.", TH1="เข้าป่า", TH2="วาปเข้าป่า", Callback=function()
-                            return Functions:B3C1Func("School/Forest");
-                        end};
-                        {type="Toggle", EN="ESP Akari", EN2="Show Akari's hitbox.", TH1="ESP Akari", TH2="มองเห็น Akari", Path="School/ESP/Akari", Callback=function(state)
-                            B3C1Con.School.ESP.Akari = state;
-                            return Functions:B3C1ESP("Akari", state);
-                        end};
-                    }};
-                    {Tab={at="B3C1", Title="Forest", Icon="book-open", Path="B3C1"}, Data={
-                        {type="Button", EN="Teleport To IJO Entrance", EN2="Teleport to the cave entrance for cutscene.", TH1="วาปไปที่ทางเข้าถ้ำ", TH2="วาปไปที่ทางเข้าถ้ำเพื่อเริ่มฉากต่อสู้", Callback=function()
-                            return Functions:B3C1Func("Forest/Cave");
-                        end};
-                        {type="Button", EN="Auto Fix Generators", EN2="Teleport & fix generators.", TH1="ซ่อม Generator", TH2="วาปไปซ่อม Generator", Callback=function()
-                            return Functions:B3C1Func("Forest/Generator");
-                        end}; {type="Space"}; {type="Space"};
-                        {type="Toggle", EN="ESP Mizuno", EN2="Show Mizuno's hitbox.", TH1="ESP Mizuno", TH2="มองเห็น Mizuno", Path="Forest/ESP/Mizuno", Callback=function(state)
-                            B3C1Con.Forest.ESP.Mizuno = state;
-                            return Functions:B3C1ESP("Mizuno", state);
-                        end};
-                    }};
-                    {Tab={at="IJO", Title="IJO", Icon="book-open", Path="B3C1"}, Data={
-                        {type="Button", EN="Grab Keycard", EN2="Teleport & collect keycard. <font color='rgb(255,0,0)'>You must open the gate or termianl & valve won't spawn.</font>", TH1="เก็บคีย์การ์ด", TH2="วาปไปเก็บคีย์การ์ด", Callback=function()
-                            return Functions:B3C1Func("IJO/Keycard");
-                        end};
-                        {type="Button", EN="Enter Codes", EN2="Magically enter the code from anywhere.", TH1="ใส่รหัส", TH2="ใส่รหัสจากที่ไหนก็ได้แบบงงๆ", Callback=function()
-                            return Functions:B3C1Func("IJO/PASS");
-                        end};
-                        {type="Button", EN="Place C4 (1)", EN2="Teleport & place C4.", TH1="วางระเบิด C4", TH2="วาปไปวางระเบิด C4", Callback=function()
-                            return Functions:B3C1Func("IJO/C4");
-                        end};
-                        {type="Button", EN="Place C4 (2)", EN2="Teleport & place C4 at Netamo.", TH1="วางระเบิด C4 ที่ผี", TH2="วาปไปวางระเบิด C4 ที่ผี", Callback=function()
-                            return Functions:B3C1Func("IJO/C4_2");
-                        end}; {type="Space"};
-                        {type="Button", EN="Trigger Leave Event", EN2="Teleport & attempt to exit IJO Place to continue the game.", TH1="วาปไปที่ทางออก IJO", TH2="วาปไปที่ทางออก IJO เพื่อให้เกมดำเนินต่อ", Callback=function()
-                            return Functions:B3C1Func("IJO/Exit");
-                        end};
-                        {type="Button", EN="Activate Terminals", EN2="Teleport & activate terminals.", TH1="เปิด terminals", TH2="วาปไปเปิด terminals", Callback=function()
-                            return Functions:B3C1Func("IJO/Terminal");
-                        end};
-                        {type="Button", EN="Turn Valves", EN2="Teleport & turn valves.", TH1="เปิดวาล์ว", TH2="วาปไปเปิดวาล์ว", Callback=function()
-                            return Functions:B3C1Func("IJO/Valve");
-                        end};
-                        {type="Button", EN="Hit Skill Check", EN2="Enter the 'Lock Threat' minigame by yourself. Only press this button by the amout of circles on screen.", TH1="กดสกิล", TH2="กดเพื่อเริ่มมินิเกม 'Lock Threat' ด้วยตัวเองแล้วค่อยกดออโต้ตามจำนวนวงกลมบนหน้าจอ", Callback=function()
-                            return Functions:B3C1Func("IJO/Threat");
-                        end}; {type="Space"}; {type="Space"};
-                        {type="Toggle", EN="ESP HogoGuntai", EN2="Show HogoGuntai's hitbox.", TH1="ESP HogoGuntai", TH2="มองเห็น HogoGuntai", Path="IJO/ESP/HogoGuntai", Callback=function(state)
-                            B3C1Con.IJO.ESP.HogoGuntai = state;
-                            return Functions:B3C1ESP("HogoGuntai", state);
-                        end};
-                    }};
-                    {Tab={at="B3C1", Title="Water", Icon="book-open", Path="B3C1"}, Data={ {type="Space"},
-                        {type="Button", EN="Complete Stair", EN2="Teleport to the end of stair.", TH1="จบด่านบันได", TH2="วาปไปข้างล่างบันได", Callback=function()
-                            return Functions:B3C1Func("Water/Stair");
-                        end}; {type="Space"};
-                        {type="Button", EN="Main Switch", EN2="Teleport & interact with the main switch.", TH1="เปิดสวิตช์หลัก", TH2="วาปไปเปิดสวิตช์หลัก", Callback=function()
-                            return Functions:B3C1Func("Water/Main");
-                        end};
-                        {type="Button", EN="Auto Wire", EN2="Magically interact with the all boxes.", TH1="เสียบสายไฟอัตโนมัติ", TH2="วาปไปเสียบสายไฟอัตโนมัติ", Callback=function()
-                            return Functions:B3C1Func("Water/Wire");
-                        end}; {type="Space"}; {type="Space"};
-                        {type="Toggle", EN="ESP Baigai", EN2="Show Baigai's hitbox.", TH1="ESP Baigai", TH2="มองเห็น Baigai", Path="Water/ESP/Baigai", Callback=function(state)
-                            B3C1Con.Water.ESP.Baigai = state;
-                            return Functions:B3C1ESP("Baigai", state);
-                        end};
-                    }};
-                };
-            });
-        };
-
-        CoruTask.New("UNIFIED-Yen", function()
-            local SpawnFolder = nil;
-            
-            if Chapter == "B2C2" or Chapter == "B2C3" or Chapter == "B2C4" then
-                local MimicCurrencySpawns = WaitForChild(W, "MimicCurrencySpawns", 30);
-                SpawnFolder = WaitForChild(MimicCurrencySpawns, "Yen", 30);
-            elseif Chapter == "B3C1" then
-                SpawnFolder = WaitForChild(W, "Yen", 30);
-            else return; end;
-
-            while true do
-                if not (YenCon.ESP or YenCon.Aura or YenCon.Auto) or CoreDestroyed then
-                    ESPF.Visible("Yen", false);
-                    return CoruTask.Close("UNIFIED-Yen");
-                end; 
-
-                local SAVEDPOS, WAS = HumRSelf.Parent and HumRSelf.CFrame, YenCon.Auto;
-                local CHs = GetChildren(SpawnFolder); for i=1, #CHs do
-                    local v=CHs[i]; if v.Parent then
-                        local Prox = FindFirstChildOfClass(v, "ProximityPrompt");
-                        if not Prox then continue; end;
-
-                        if YenCon.Auto and Prox.Enabled then
-                            Tp(HumRSelf, v.CFrame, 0.3); fireproximityprompt(Prox);
-                        elseif YenCon.Aura and dist(v.Position) <= 20 then
-                            fireproximityprompt(Prox);
-                        end; if YenCon.ESP then
-                            local ESPObject = ESPF.ESP("Yen", v, {
-                                Color = BLUE;
-                                Size = VEC2;
-                                Text = "Yen";
-                            });
-                        end;
-                    end;
-                end; if WAS then Tp(HumRSelf, SAVEDPOS); end;
-                if YenCon.ESP then ESPF.Visible("Yen", true, true); end;
-
-                twait(0.1);
-            end;
-        end);
-
-        local LSecureUI = function()
-            WindUI = WindLib();
-            local Window = WindUI:CreateWindow({
-                Title = GG.Title or "MIMIC / Slate",
-                Folder = GG.Folder or "MimicSlate",
-                Transparent = false, Theme = "Slate", Acrylic = false,
-                SideBarWidth = 178, HasOutline = true, NewElements = true,
-                OpenButton = {Title = "SLATE", Enabled = true, Draggable = true, OnlyMobile = false},
-                Topbar = {Height = 48, ButtonsType = "Mac"},
-            });
-            local Tabs = {};
-            Tabs.Overview = Window:Tab({Title = "Overview", Icon = "layout-dashboard"});
-            Tabs.Welcome = Tabs.Overview;
-            Tabs.Yen = ScriptData.AutoData.YenTab and Window:Tab({Title = "Yen", Icon = "coins"}) or false;
-            Tabs.B3C1 = Windy:CreateDynamic(Window, Tabs, ScriptData.AutoData.PackB3C1);
-            local sections = Functions:PairingSections(ScriptData.Sections);
-            Tabs.Section = Windy:CreateDynamic(Window, Tabs, sections);
-            if Tabs.Yen then Windy:CreateComponent(Tabs.Yen, ScriptData.AutoData.YenTab, "Yen"); end;
-            GG.LegacyWindow = Window;
-            GG.LegacyTabs = Tabs;
-            if GG.AttachWindow then GG.AttachWindow(Window, Tabs, Functions, Chapter); end;
-            Window:OnDestroy(function() Cleanup(); end);
-            Window:SetToggleKey(Enum.KeyCode[LoaderSettings.UIKeybind or "RightShift"] or Enum.KeyCode.RightShift);
-            ScriptCache.WindUI, ScriptCache.Window = WindUI, Window;
-            Window:SelectTab(1);
-        end;
-
-        local LSecureLoad = function()
-            local ok, failure = pcall(function()
-                CoreDestroyed = false;
-                GG.Configs = Config;
-                GameAI, GameAI2 = FindFirstChild(W, "GameAI"), FindFirstChild(W, "GameAI2");
-                if CommonF.Init then pcall(function() CommonF.Init(GetService(game, "VirtualInputManager")); end); end;
-                if CoruTask.Init then CoruTask.Init(); end;
-                GG.LegacyFunctions = Functions;
-                GG.LegacyChapter = Chapter;
-                GG.ResetTransient = function()
-                    ForceFloat = "None";
-                    pcall(function() Functions:FreeCam(false); end);
-                    ClientPackage.UpdatePosition(false, "None", HumRSelf);
-                end;
-                GG.StopLegacyActions = StopActions;
-                GG.LegacyState = function()
-                    Cam = W.CurrentCamera;
-                    return {Character = selc, Humanoid = HumSelf, Root = HumRSelf, Camera = Cam,
-                        Backpack = BP, ForceFloat = ForceFloat, Destroyed = CoreDestroyed};
-                end;
-                LSecureUI();
-                local function refreshCharacter(char)
-                    selc = char; BP = selff:FindFirstChildOfClass("Backpack") or EMPTY_OBJECT;
-                    HumSelf = WaitForChild(char, "Humanoid", 20) or EMPTY_OBJECT;
-                    HumRSelf = WaitForChild(char, "HumanoidRootPart", 20) or EMPTY_OBJECT;
-                    if CoreDestroyed then return; end;
-                    Functions:GameValidate();
-                end;
-                CoreConnection[#CoreConnection + 1] = selff.CharacterAdded:Connect(refreshCharacter);
-                CoreConnection[#CoreConnection + 1] = H.Stepped:Connect(function()
-                    if CoreDestroyed then return; end;
-                    Cam = W.CurrentCamera;
-                    ClientPackage.UpdatePosition(false, ForceFloat, HumRSelf);
-                end);
-                if selff.Character then tk.spawn(refreshCharacter, selff.Character); end;
-
-                -- The dispatcher is a core service. Stop cancels action tasks,
-                -- while this loop remains available for later toggle changes.
-                task.spawn(function()
-                    while not CoreDestroyed do
-                        if YenCon.ESP or YenCon.Aura or YenCon.Auto then CoruTask.Handle("UNIFIED-Yen"); end;
-                        task.wait(0.12);
-                    end;
-                end);
-
-                if GG.LoadingSignal then GG.LoadingSignal:Fire(100); end;
-            end);
-            if not ok then
-                Cleanup();
-                warn("[Slate] Initialization failed: " .. tostring(failure));
-                return false, failure;
-            end;
-            return true;
-        end;
-        GG.LSecureLoad = LSecureLoad;
-        return LSecureLoad;
-    end;
-};
-
-end
-
-local Runtime = (function()
--- Mimic runtime with the original cc WindUI interface.
-local Runtime = {}
-local VERSION = "1.1.0-cc"
-
-local function environment()
-    local ok, env = pcall(function() return getgenv and getgenv() end)
-    return ok and type(env) == "table" and env or _G
-end
-
-local function clone(value, depth)
-    depth = depth or 0
-    if depth > 16 then return nil end
-    local kind = type(value)
-    if kind == "boolean" or kind == "string" then return value end
-    if kind == "number" then
-        if value == value and math.abs(value) < math.huge then return value end
-        return nil
-    end
-    if kind ~= "table" then return nil end
-    local out = {}
-    for key, item in pairs(value) do
-        if type(key) == "string" or type(key) == "number" then out[key] = clone(item, depth + 1) end
-    end
-    return out
-end
-
-local function signal(ctx)
-    local event = Instance.new("BindableEvent")
-    ctx.addCleanup(function() event:Destroy() end)
-    return {
-        Connect = function(_, fn) return event.Event:Connect(fn) end,
-        Once = function(_, fn) return event.Event:Once(fn) end,
-        Fire = function(_, ...) event:Fire(...) end,
-        Wait = function() return event.Event:Wait() end,
-    }
-end
-
-local function resetLegacyFlags(config, keepVisuals)
-    -- Store preferences, but do not start saved chapter automation merely by loading a file.
-    local excluded = {Client = true, SlateESP = true, Egao = true, NearbyKill = true, Interface = true}
-    local function reset(node)
-        for key, value in pairs(node) do
-            if keepVisuals and key == "ESP" then continue end
-            if type(value) == "boolean" then node[key] = false
-            elseif type(value) == "table" then reset(value) end
-        end
-    end
-    for key, value in pairs(config) do
-        if not excluded[key] and type(value) == "table" then reset(value) end
-    end
-end
-
-function Runtime.start(options)
-    assert(type(options) == "table" and type(options.Modules) == "table", "Missing Slate modules")
-    local modules, scope = options.Modules, options.Scope
-    local env = environment()
-    env.__MimicSlate = env.__MimicSlate or {}
-    local previous = env.__MimicSlate.Active
-    if previous and type(previous.Destroy) == "function" then pcall(previous.Destroy) end
-
-    local services = {}
-    for _, name in ipairs({"Players", "RunService", "UserInputService", "Lighting", "Workspace", "ReplicatedStorage", "TeleportService", "TweenService", "Stats", "HttpService", "ProximityPromptService"}) do
-        services[name] = game:GetService(name)
-    end
-    local player = services.Players.LocalPlayer
-    if not player then error("Mimic Slate requires a local player", 0) end
-    local ctx = {
-        Scope = scope, Version = VERSION, Services = services, Player = player,
-        Config = {}, Connections = {}, Alive = true, Cleanups = {}, Actions = {},
-        Modules = modules, QueueInfo = {}, UIUrl = options.UIUrl or "",
-        LegacyTasks = {}, ActionEpoch = 0,
-    }
-    env.__MimicSlate.Active = ctx
-    local queueTable = env.__MimicSlateQueue or {}
-    env.__MimicSlateQueue = queueTable
-    ctx.QueueInfo = clone(queueTable[scope]) or {}
-    local inheritedQueueGeneration = tonumber(ctx.QueueInfo._Generation) or 0
-    if ctx.QueueInfo.Cancelled then ctx.QueueInfo = {} end
-    ctx.SourceCode = env.__MimicSlateSources and env.__MimicSlateSources[scope]
-
-    ctx.addCleanup = function(fn) table.insert(ctx.Cleanups, fn) end
-    ctx.Notify = function(title, content)
-        if ctx.UI and ctx.Alive then
-            ctx.UI:Notify({Title = tostring(title), Content = tostring(content or ""), Duration = 6, Icon = "info"})
-        else warn("[Mimic Slate] " .. tostring(title) .. ": " .. tostring(content or "")) end
-    end
-
-    local http = services.HttpService
-    local settingsPath = "MimicSlate_" .. scope .. ".json"
-    local sharedPath = "MimicSlate_Shared.json"
-    local function readSettings(path)
-        if type(readfile) ~= "function" or type(isfile) ~= "function" then return {} end
-        local ok, result = pcall(function()
-            if not isfile(path) then return {} end
-            local data = http:JSONDecode(readfile(path))
-            return type(data) == "table" and data or {}
-        end)
-        return ok and result or {}
-    end
-    ctx.Config = readSettings(settingsPath)
-    local shared = readSettings(sharedPath)
-    ctx.Config.Client = shared.Client or ctx.Config.Client or {Client = {}}
-    ctx.Config.Client.Client = ctx.Config.Client.Client or {}
-    ctx.Config.SlateESP = shared.SlateESP or ctx.Config.SlateESP or {}
-    ctx.Config.Interface = shared.Interface or ctx.Config.Interface or {}
-    resetLegacyFlags(ctx.Config)
-    local saveGeneration = 0
-    local function saveNow()
-        if type(writefile) ~= "function" then return false end
-        local ok = pcall(function()
-            writefile(settingsPath, http:JSONEncode(clone(ctx.Config)))
-            writefile(sharedPath, http:JSONEncode(clone({Client = ctx.Config.Client, SlateESP = ctx.Config.SlateESP, Interface = ctx.Config.Interface})))
-        end)
-        return ok
-    end
-    ctx.Save = function()
-        saveGeneration += 1
-        local generation = saveGeneration
-        task.delay(0.35, function() if ctx.Alive and generation == saveGeneration then saveNow() end end)
-    end
-
-    local originalCamera = services.Workspace.CurrentCamera
-    local originalCameraState = originalCamera and {CameraType = originalCamera.CameraType, CameraSubject = originalCamera.CameraSubject, FieldOfView = originalCamera.FieldOfView}
-    local changedAnchors = setmetatable({}, {__mode = "k"})
-    local activeTweens = {}
-    local scheduler
-    ctx.Destroy = function()
-        if not ctx.Alive then return end
-        saveNow()
-        ctx.Alive = false
-        ctx.ActionEpoch += 1
-        for thread in pairs(ctx.Actions) do
-            if thread ~= coroutine.running() then pcall(task.cancel, thread) end
-        end
-        for thread in pairs(ctx.LegacyTasks) do
-            if thread ~= coroutine.running() then pcall(task.cancel, thread) end
-        end
-        if scheduler then scheduler.Destroy() end
-        for tween in pairs(activeTweens) do pcall(function() tween:Cancel() end) end
-        for i = #ctx.Cleanups, 1, -1 do pcall(ctx.Cleanups[i]) end
-        for _, connection in pairs(ctx.Connections) do pcall(function() connection:Disconnect() end) end
-        for part, value in pairs(changedAnchors) do if part.Parent then pcall(function() part.Anchored = value end) end end
-        local camera = services.Workspace.CurrentCamera
-        if camera and originalCameraState then
-            pcall(function()
-                camera.CameraType = originalCameraState.CameraType
-                if originalCameraState.CameraSubject and originalCameraState.CameraSubject.Parent then camera.CameraSubject = originalCameraState.CameraSubject end
-                camera.FieldOfView = originalCameraState.FieldOfView
-            end)
-        end
-        pcall(function() services.RunService:Set3dRenderingEnabled(true) end)
-        if ctx.Window then pcall(function() ctx.Window:Destroy() end) end
-        if env.__MimicSlate.Active == ctx then env.__MimicSlate.Active = nil end
-    end
-
-    local function loadUI()
-        if ctx.UIUrl ~= "" then
-            local ok, result = pcall(function()
-                local source = game:HttpGet(ctx.UIUrl)
-                assert(type(source) == "string" and #source > 100, "UI download is empty")
-                local fn, compileError = loadstring(source, "MimicSlate/UI")
-                assert(fn, compileError)
-                local ui = fn()
-                assert(type(ui) == "table" and type(ui.CreateWindow) == "function", "UI response has an incompatible API")
-                return ui
-            end)
-            if ok then ctx.UISource = "GitHub"; return result end
-            ctx.UIError = tostring(result)
-            if not modules.CCUI then error("Cannot load CC UI: " .. ctx.UIError, 0) end
-        end
-        assert(modules.CCUI, "CC UI is unavailable")
-        ctx.UISource = "Bundled"
-        return modules.CCUI()
-    end
-    local uiOK, uiResult = pcall(loadUI)
-    if not uiOK then ctx.Destroy(); error(tostring(uiResult), 0) end
-    ctx.UI = uiResult
-
-    local function findQueue()
-        local candidates = {}
-        local function add(fn) if type(fn) == "function" then table.insert(candidates, fn) end end
-        add(env.queue_on_teleport); add(env.queueonteleport); add(env.QueueOnTeleport)
-        add(queue_on_teleport); add(queueonteleport)
-        if type(syn) == "table" then add(syn.queue_on_teleport) end
-        if type(fluxus) == "table" then add(fluxus.queue_on_teleport) end
-        return candidates[1]
-    end
-    local queueGeneration = inheritedQueueGeneration
-    ctx.QueueSelf = function(info)
-        queueGeneration += 1
-        info = clone(info) or {}
-        info._Generation = queueGeneration
-        info._Scope = scope
-        info._Version = VERSION
-        ctx.QueueInfo = info
-        queueTable[scope] = info
-        -- A state file lets a later Stop invalidate an already appended queued payload.
-        if type(writefile) == "function" then pcall(function() writefile("MimicSlate_Queue_" .. scope .. ".json", http:JSONEncode(info)) end) end
-        local queue = findQueue()
-        if not queue or type(ctx.SourceCode) ~= "string" then return false end
-        local encoded = http:JSONEncode(info)
-        local source = string.format([==[
-local E = (getgenv and getgenv()) or _G
-E.__MimicSlateQueue = E.__MimicSlateQueue or {}
-local scope, generation = %q, %d
-local info = game:GetService("HttpService"):JSONDecode(%q)
-if type(readfile)=="function" and type(isfile)=="function" then
-    pcall(function()
-        local path="MimicSlate_Queue_"..scope..".json"
-        if isfile(path) then
-            local latest=game:GetService("HttpService"):JSONDecode(readfile(path))
-            if latest._Generation and latest._Generation>info._Generation then info=latest end
-        end
-    end)
-end
-local prior=E.__MimicSlateQueue[scope]
-if not prior or (tonumber(prior._Generation) or 0)<=info._Generation then E.__MimicSlateQueue[scope]=info end
-task.defer(function()
-    local current=E.__MimicSlateQueue[scope]
-    if not current or current.Cancelled or current._Generation~=generation then return end
-    E.__MimicSlateSources=E.__MimicSlateSources or {}
-    E.__MimicSlateSources[scope]=%q
-    local fn,err=loadstring(E.__MimicSlateSources[scope],"MimicSlate/"..scope)
-    if fn then fn() else warn(err) end
-end)
-]==], scope, queueGeneration, encoded, ctx.SourceCode)
-        local ok = pcall(queue, source)
-        return ok
-    end
-
-    local function root()
-        local char = player.Character
-        return char and char:FindFirstChild("HumanoidRootPart")
-    end
-    local function position(value)
-        if typeof(value) == "Vector3" then return value end
-        if typeof(value) == "CFrame" then return value.Position end
-        if typeof(value) ~= "Instance" then return nil end
-        if value:IsA("BasePart") then return value.Position end
-        if value:IsA("Attachment") then return value.WorldPosition end
-        if value:IsA("Model") then return value:GetPivot().Position end
-        local part = value:FindFirstChildWhichIsA("BasePart", true)
-        return part and part.Position
-    end
-    local function ensureAlive()
-        if not ctx.Alive then error("Slate action cancelled", 0) end
-    end
-    local trackedTask = {}
-    local function scheduled(mode, delay, fn, ...)
-        local args, epoch = table.pack(...), ctx.ActionEpoch
-        local function invoke()
-            if not ctx.Alive or epoch ~= ctx.ActionEpoch then return end
-            local running = coroutine.running()
-            ctx.LegacyTasks[running] = epoch
-            local ok, err = xpcall(function() fn(table.unpack(args, 1, args.n)) end, debug.traceback)
-            ctx.LegacyTasks[running] = nil
-            if not ok and ctx.Alive and epoch == ctx.ActionEpoch then
-                ctx.Notify("Action paused", tostring(err):match("^[^\n]+"))
-            end
-        end
-        local thread
-        if mode == "delay" then thread = task.delay(delay, invoke)
-        elseif mode == "defer" then thread = task.defer(invoke)
-        else thread = task.spawn(invoke) end
-        if coroutine.status(thread) ~= "dead" then ctx.LegacyTasks[thread] = epoch end
-        return thread
-    end
-    trackedTask.spawn = function(fn, ...) return scheduled("spawn", 0, fn, ...) end
-    trackedTask.defer = function(fn, ...) return scheduled("defer", 0, fn, ...) end
-    trackedTask.delay = function(delay, fn, ...) return scheduled("delay", delay, fn, ...) end
-    trackedTask.wait = function(duration)
-        local thread = coroutine.running()
-        local epoch = ctx.LegacyTasks[thread] or ctx.ActionEpoch
-        ensureAlive()
-        local elapsed = task.wait(duration)
-        ensureAlive()
-        if epoch ~= ctx.ActionEpoch then error("Slate action cancelled", 0) end
-        return elapsed
-    end
-    trackedTask.cancel = function(thread) ctx.LegacyTasks[thread] = nil; return task.cancel(thread) end
-    local function cancelLegacyTasks()
-        ctx.ActionEpoch += 1
-        for thread in pairs(ctx.LegacyTasks) do
-            if thread ~= coroutine.running() then pcall(task.cancel, thread) end
-            ctx.LegacyTasks[thread] = nil
-        end
-    end
-    local common = {}
-    common.dist = function(a, b)
-        local pa, pb = position(a), position(b or root())
-        return pa and pb and (pa - pb).Magnitude or math.huge
-    end
-    common.distOf = function(a, b, distance) return common.dist(a, b) <= (distance or math.huge) end
-    common.Tp = function(part, target, delay)
-        ensureAlive()
-        part = part or root()
-        assert(part and part.Parent, "Character is not ready")
-        if typeof(target) == "Vector3" then target = CFrame.new(target) end
-        assert(typeof(target) == "CFrame", "Destination is not ready")
-        if part:IsA("Model") then part:PivotTo(target) else part.CFrame = target end
-        if delay and delay > 0 then task.wait(delay); ensureAlive() end
-        return true
-    end
-    common.Tween = function(args)
-        ensureAlive()
-        local part = args.primary or root()
-        assert(part and part.Parent, "Character is not ready")
-        local speed = math.clamp(tonumber(ctx.Config.Interface.TravelSpeed) or 85, 10, 250)
-        local distance = args.goal.CFrame and common.dist(part, args.goal.CFrame) or 30
-        local info = args.info or TweenInfo.new(math.clamp(distance / speed, 0.2, 25), Enum.EasingStyle.Linear)
-        local tween = services.TweenService:Create(part, info, args.goal)
-        activeTweens[tween] = true
-        tween:Play()
-        local state = tween.Completed:Wait()
-        activeTweens[tween] = nil
-        ensureAlive()
-        if state == Enum.PlaybackState.Cancelled then error("Slate action cancelled", 0) end
-        return tween
-    end
-    common.Anchored = function(part, value)
-        ensureAlive()
-        assert(part and part.Parent, "Character is not ready")
-        if changedAnchors[part] == nil then changedAnchors[part] = part.Anchored end
-        part.Anchored = value
-    end
-    common.HumanoidEquip = function(humanoid, tool)
-        ensureAlive()
-        assert(humanoid and humanoid.Parent and tool and tool.Parent, "Required tool is not ready")
-        humanoid:EquipTool(tool)
-    end
-    common.Init = function(input) common.Input = input end
-    common.CKey = function(_, key, duration)
-        ensureAlive()
-        local input = common.Input
-        if not input then
-            local ok, result = pcall(game.GetService, game, "VirtualInputManager")
-            input = ok and result
-        end
-        assert(input, "Keyboard simulation is unavailable")
-        input:SendKeyEvent(true, key, false, game)
-        task.wait(duration or 0.03)
-        input:SendKeyEvent(false, key, false, game)
-    end
-
-    scheduler = {Definitions = {}, Threads = {}, RetryAfter = {}, Intialized = false}
-    scheduler.New = function(id, fn) scheduler.Definitions[id] = fn end
-    scheduler.Init = function() scheduler.Intialized = true end
-    scheduler.Close = function(id)
-        local thread = scheduler.Threads[id]
-        scheduler.Threads[id] = nil
-        if thread and thread ~= coroutine.running() then pcall(task.cancel, thread) end
-    end
-    scheduler.Handle = function(id)
-        if not ctx.Alive or scheduler.Threads[id] or (scheduler.RetryAfter[id] or 0) > os.clock() then return end
-        local fn = scheduler.Definitions[id]
-        if not fn then return end
-        -- Defer so the thread is registered before a synchronous return can clear it.
-        scheduler.Threads[id] = task.defer(function()
-            local ok, err = xpcall(fn, debug.traceback)
-            scheduler.Threads[id] = nil
-            if not ok and ctx.Alive then
-                scheduler.RetryAfter[id] = os.clock() + 6
-                ctx.Notify("Action paused", id .. ": " .. tostring(err):match("^[^\n]+"))
-            end
-        end)
-    end
-    scheduler.Destroy = function()
-        for id, thread in pairs(scheduler.Threads) do
-            if thread ~= coroutine.running() then pcall(task.cancel, thread) end
-            scheduler.Threads[id] = nil
-        end
-    end
-
-    ctx.Visuals = modules.VisualsPlayer()(ctx)
-
-    local currentAction = {}
-    local overlayCallbacks = {}
-    local legacyControls = {}
-    local function runAction(key, fn, ...)
-        if not ctx.Alive or currentAction[key] then return end
+    local function callPacket(channel, ...)
+        if not channel then return false end
         local args = table.pack(...)
-        local thread = coroutine.running()
-        currentAction[key] = thread
-        ctx.Actions[thread] = key
-        local ok, result = xpcall(function() return fn(table.unpack(args, 1, args.n)) end, debug.traceback)
-        ctx.Actions[thread] = nil
-        currentAction[key] = nil
-        if not ok and ctx.Alive then
-            if ctx.GG and ctx.GG.ResetTransient then pcall(ctx.GG.ResetTransient) end
-            for part, value in pairs(changedAnchors) do if part.Parent then pcall(function() part.Anchored = value end) end end
-            local firstLine = tostring(result):match("^[^\n]+")
-            ctx.Notify("Action unavailable", key .. "\n" .. firstLine)
-        end
-        return result
-    end
-
-    local function configPath(path, base)
-        local keys = {}
-        if base and base ~= "IGNORE" then for key in tostring(base):gmatch("[^/]+") do table.insert(keys, key) end end
-        if path then for key in tostring(path):gmatch("[^/]+") do table.insert(keys, key) end end
-        return keys
-    end
-    local function getValue(keys)
-        local node = ctx.Config
-        for _, key in ipairs(keys) do if type(node) ~= "table" then return nil end; node = node[key] end
-        return node
-    end
-    local function setValue(keys, value)
-        if #keys == 0 then return end
-        local node = ctx.Config
-        for i = 1, #keys - 1 do node[keys[i]] = node[keys[i]] or {}; node = node[keys[i]] end
-        node[keys[#keys]] = value
-        ctx.Save()
-    end
-    local windy = {}
-    function windy:CreateComponent(tab, data, base)
-        if not tab or type(data) ~= "table" then return end
-        for index, item in ipairs(data) do
-            local kind = item.type or item.Type
-            if kind == "Group" then
-                for _, group in ipairs(item.dats or {}) do
-                    if group.Title then tab:Section({Title = group.Title}) end
-                    self:CreateComponent(tab, group.dat, base)
+        local ok, sent = pcall(function()
+            if typeof(channel) == "Instance" then
+                if channel:IsA("RemoteEvent") then
+                    channel:FireServer(table.unpack(args, 1, args.n))
+                    return true
+                elseif channel:IsA("RemoteFunction") then
+                    channel:InvokeServer(table.unpack(args, 1, args.n))
+                    return true
                 end
-            elseif kind == "Space" then tab:Space()
-            elseif kind == "Paragraph" then tab:Paragraph({Title = item.Title or item.EN or "", Desc = item.Desc or item.EN2 or ""})
-            elseif kind == "Section" then tab:Section({Title = item.Title or item.EN or ""})
-            elseif kind then
-                local keys = configPath(item.Path, base)
-                local value = getValue(keys)
-                local params = {
-                    Title = item.EN or item.Title or kind,
-                    Desc = item.EN2 or item.Desc or "",
-                    Icon = item.Icon, Locked = item.Locked == true,
-                }
-                local callback = item.Callback
-                params.Callback = function(newValue)
-                    if item.Locked or not ctx.Alive then return end
-                    if kind ~= "Button" and item.Path then setValue(keys, newValue) end
-                    if callback then return runAction(params.Title, callback, newValue) end
-                end
-                if kind == "Toggle" and callback and params.Title:match("^ESP ") then
-                    table.insert(overlayCallbacks, {Keys = keys, Callback = callback})
-                end
-                if kind == "Toggle" then params.Value = value == true
-                elseif kind == "Slider" then
-                    local range = item.Value or {}
-                    params.Value = {Min = range.Min or 0, Max = range.Max or 100, Default = tonumber(value) or range.Default or range.Min or 0}
-                    params.Step = item.Step or 1
-                elseif kind == "Input" then params.Value = value or item.Value or ""
-                elseif kind == "Dropdown" then params.Value = value or item.Value; params.Values = item.Values; params.Multi = item.Multi
-                else params.Value = value or item.Value end
-                if type(tab[kind]) == "function" then
-                    local control = tab[kind](tab, params)
-                    if kind == "Toggle" and item.Path then table.insert(legacyControls, {Control = control, Keys = keys}) end
-                    if item.Locked and control and control.Lock then control:Lock() end
+            elseif type(channel) == "table" then
+                if type(channel.FireServer) == "function" then
+                    channel:FireServer(table.unpack(args, 1, args.n))
+                    return true
+                elseif type(channel.InvokeServer) == "function" then
+                    channel:InvokeServer(table.unpack(args, 1, args.n))
+                    return true
                 end
             end
-        end
-    end
-    function windy:CreateDynamic(window, tabs, pack)
-        if not pack or not pack.Tabs then return false end
-        local output
-        for _, group in ipairs(pack.Tabs) do
-            local spec = group.Tab or {}
-            local isTravel = spec.at == "Section"
-            if isTravel then
-                ctx.TravelTab = ctx.TravelTab or window:Tab({Title = "Teleport", Icon = "map-pinned"})
-                output = ctx.TravelTab
-            else
-                ctx.ChapterTab = ctx.ChapterTab or window:Tab({Title = scope == "Gamemodes" and "Modes" or "Chapter", Icon = "book-open"})
-                output = ctx.ChapterTab
-            end
-            if spec.Title and spec.Title ~= "Main" and not isTravel then output:Section({Title = spec.Title}) end
-            self:CreateComponent(output, group.Data, spec.Path)
-            if spec.at then tabs[spec.at] = output end
-        end
-        return output
-    end
-
-    local queuePack = {}
-    queuePack.SetInfo = function(key, value) ctx.QueueInfo[key] = value end
-    queuePack.Init = function()
-        if not ctx.QueueSelf(ctx.QueueInfo) then error("This action needs queue_on_teleport support. Enable auto-execute or run the same file again after teleport.", 0) end
-        return true
-    end
-    local download = {Signal = signal(ctx)}
-    download.Download = function(check, name)
-        if name ~= "Paintings" or not modules.Paintings then return false end
-        if check then return true end
-        local data = modules.Paintings().Function()
-        download.Signal:Fire(name, data)
-        return true
-    end
-    local promptPackage = {UpdateState = function() end}
-    local uiFacade = setmetatable({}, {__index = ctx.UI})
-    function uiFacade:CreateWindow(params)
-        params = params or {}
-        params.Title = scope == "Book3" and "Nevoirs - Rage" or ("Nevoirs - " .. (scope:gsub("Book", "Book ")))
-        params.Subtitle = scope == "Gamemodes" and "GAMEMODES" or (scope:gsub("Book", "BOOK "))
-        params.Author = "Nevoirs"
-        params.Folder = scope == "Book3" and "Nevoirs_Rage" or ("Nevoirs_" .. scope)
-        params.Theme = "Dark"
-        params.Transparent = true
-        params.Acrylic = false
-        params.ToggleKey = Enum.KeyCode.RightControl
-        local window = ctx.UI:CreateWindow(params)
-        ctx.Window = window
-        window:OnDestroy(ctx.Destroy)
-        return window
-    end
-
-    local gg = {
-        Configs = ctx.Config, ScriptCache = {userIdentify = "Nevoirs"}, QUEUE_INFO = ctx.QueueInfo,
-        LoaderSettings = {TheMimicLoader = {Load_Sections = true}, UIKeybind = "RightControl", AllowClientTab = false, AllowAcrylicBlur = false, ESPMode = "Slate"},
-        LoadingSignal = signal(ctx), ESPObjects = {}, RegisterCleanup = ctx.addCleanup,
-        Title = "Nevoirs / " .. scope, LowerC = hookfunction or hookfunc,
-        Task = trackedTask,
-    }
-    gg.Dispatch = function(fn, ...)
-        if not ctx.Alive then return end
-        local thread, args = coroutine.running(), table.pack(...)
-        ctx.LegacyTasks[thread] = ctx.ActionEpoch
-        local ok, result = xpcall(function() return fn(table.unpack(args, 1, args.n)) end, debug.traceback)
-        ctx.LegacyTasks[thread] = nil
-        if not ok and ctx.Alive then
-            local now = os.clock()
-            if not ctx.LastSignalError or now - ctx.LastSignalError > 5 then
-                ctx.LastSignalError = now
-                ctx.Notify("Action paused", tostring(result):match("^[^\n]+"))
-            end
-        end
-        return result
-    end
-    ctx.GG = gg
-    local extensions
-    if modules.Book3Extensions and (scope == "Book3" or scope == "Gamemodes") then extensions = modules.Book3Extensions()(ctx) end
-
-    local function addOverview(chapter)
-        local tab = ctx.Overview
-        tab:Paragraph({Title = "Nevoirs / " .. scope, Desc = "Main: nhiệm vụ và dịch chuyển · Chiến đấu: Nearby Kill · ESP: hiển thị · Cá nhân: di chuyển · Cài đặt: cấu hình."})
-        if tab.Status then
-            ctx.OverviewStatus = tab:Status({Title = "Session", Icon = "activity", State = "active", Fields = {Package = scope, Chapter = chapter or "Lobby / unknown", Player = player.DisplayName, Interface = ctx.UISource}})
-        else
-            tab:Paragraph({Title = scope .. " / " .. (chapter or "Lobby"), Desc = player.DisplayName})
-        end
-        if ctx.UIError then tab:Paragraph({Title = "Đang dùng UI đi kèm", Desc = "Không tải được UI raw. Bản WindUI của cc đã nhúng đang được sử dụng."}) end
-        tab:Section({Title = "Quick actions"})
-        tab:Button({Title = "Stop chapter actions", Icon = "square", Desc = "Stops active tasks and resets chapter switches.", Callback = function()
-            scheduler.Destroy()
-            cancelLegacyTasks()
-            for thread in pairs(ctx.Actions) do if thread ~= coroutine.running() then pcall(task.cancel, thread) end end
-            table.clear(ctx.Actions); table.clear(currentAction)
-            resetLegacyFlags(ctx.Config, true)
-            for _, entry in ipairs(legacyControls) do
-                if entry.Control and entry.Control.SetValue then entry.Control:SetValue(getValue(entry.Keys) == true, true) end
-            end
-            if gg.StopLegacyActions then pcall(gg.StopLegacyActions) end
-            if gg.ResetTransient then pcall(gg.ResetTransient) end
-            if extensions and extensions.StopAll then extensions.StopAll() end
-            for tween in pairs(activeTweens) do pcall(function() tween:Cancel() end) end
-            for part, value in pairs(changedAnchors) do if part.Parent then pcall(function() part.Anchored = value end) end end
-            ctx.Notify("Chapter actions stopped", "Movement and visual preferences are retained.")
-        end})
-        tab:Button({Title = "Unload", Icon = "power", Desc = "Closes the interface and restores managed player effects.", Callback = ctx.Destroy})
-    end
-    local function addSettings(window)
-        local tab = window:Tab({Title = "Settings", Icon = "settings"})
-        tab:Section({Title = "Interface"})
-        tab:Slider({Title = "UI Scale", Desc = "Điều chỉnh kích thước giao diện.", Value = {Min = 0.58, Max = 0.90, Default = tonumber(ctx.Config.Interface.CCScale) or (services.UserInputService.TouchEnabled and 0.62 or 0.60)}, Step = 0.01, Callback = function(value)
-            ctx.Config.Interface.CCScale = value; window:SetUIScale(value); ctx.Save()
-        end})
-        tab:Keybind({Title = "Menu key", Value = Enum.KeyCode.RightControl, ChangedCallback = function(key) window:SetToggleKey(key) end})
-        tab:Slider({Title = "Travel speed", Desc = "Used by chapter routes that do not specify a duration.", Value = {Min = 10, Max = 200, Default = tonumber(ctx.Config.Interface.TravelSpeed) or 85}, Step = 5, Callback = function(value) ctx.Config.Interface.TravelSpeed = value; ctx.Save() end})
-        tab:Section({Title = "Configuration"})
-        tab:Button({Title = "Save preferences", Icon = "save", Callback = function()
-            ctx.Notify(saveNow() and "Preferences saved" or "Session preferences", type(writefile) == "function" and "Saved on this device." or "File storage is unavailable; preferences last for this session.")
-        end})
-        tab:Paragraph({Title = "Nevoirs " .. VERSION, Desc = "UI gốc cc / WindUI · " .. scope .. "\nRightCtrl hoặc avatar bên trái để ẩn/hiện menu."})
-    end
-    gg.AttachWindow = function(window, tabs, functions, chapter)
-        ctx.Window = window; ctx.LegacyFunctions = functions; ctx.Chapter = chapter
-        ctx.Overview = tabs.Overview or tabs.Welcome or window:Tab({Title = "Overview", Icon = "home"})
-        addOverview(chapter)
-        if scope == "Book3" and chapter == "B3C1" and ctx.ChapterTab then
-            local tab = ctx.ChapterTab
-            tab:Section({Title = "Additional objectives"})
-            tab:Button({Title = "Get bolt cutter", Desc = "Uses the City cutter interaction from the original chapter logic.", Icon = "scissors", Callback = function() runAction("Get bolt cutter", function() functions:B3C1Func("City/Cutter") end) end})
-            for _, targetName in ipairs({"Terminal", "BoulderSeal"}) do
-                local target = targetName
-                local keys = {"B3C1", "IJO", "ESP", target}
-                local cb = function(value) functions:B3C1ESP(target, value) end
-                table.insert(overlayCallbacks, {Keys = keys, Callback = cb})
-                tab:Toggle({Title = "ESP " .. target, Desc = "IJO objective marker.", Value = false, Callback = function(value) setValue(keys, value); runAction("ESP " .. target, cb, value) end})
-            end
-        end
-        ctx.Visuals.BuildTabs(window)
-        if extensions then extensions.BuildTabs(window, chapter) end
-        addSettings(window)
-        window:SetUIScale(math.clamp(tonumber(ctx.Config.Interface.CCScale) or (services.UserInputService.TouchEnabled and 0.62 or 0.60), 0.58, 0.90))
-        window:SelectTab(1)
-    end
-
-    local success, failure = xpcall(function()
-        local legacy = modules.Legacy(gg)
-        local loader = legacy.Function(function() return {} end, function() return uiFacade end, {Init = function() end, Tutorial = function() end}, windy, ctx.Visuals.ClientPackage, scheduler, common, ctx.Visuals.ESPF, promptPackage, download, queuePack)
-        assert(type(loader) == "function", "Chapter adapter did not return a loader")
-        local loaded, reason = loader()
-        if loaded == false then error(reason or "Chapter initialization failed", 0) end
-    end, debug.traceback)
-    if not success then
-        if not ctx.Window then uiFacade:CreateWindow({}) end
-        if not ctx.OverviewStatus then
-            ctx.Overview = ctx.Overview or ctx.Window:Tab({Title = "Overview", Icon = "home"})
-            addOverview(nil)
-            ctx.Overview:Paragraph({Title = "Chapter adapter paused", Desc = "This area is not ready for the selected package. Player and visual controls remain available."})
-            ctx.Visuals.BuildTabs(ctx.Window)
-            if extensions then extensions.BuildTabs(ctx.Window, nil) end
-            addSettings(ctx.Window)
-        end
-        ctx.Notify("Chapter adapter paused", tostring(failure):match("^[^\n]+"))
-        warn("[Mimic Slate] " .. tostring(failure))
-    end
-    -- Refresh only selected ESP discovery adapters. Rendering and distances use
-    -- the one shared renderer; legacy progress listeners are deduplicated there.
-    local discoveryElapsed, discoveryBusy = 0, false
-    table.insert(ctx.Connections, services.RunService.Heartbeat:Connect(function(dt)
-        discoveryElapsed += dt
-        if not ctx.Alive or discoveryBusy or discoveryElapsed < 2 then return end
-        discoveryElapsed = 0
-        discoveryBusy = true
-        task.defer(function()
-            for _, entry in ipairs(overlayCallbacks) do
-                if not ctx.Alive then break end
-                if getValue(entry.Keys) == true then pcall(entry.Callback, true) end
-            end
-            discoveryBusy = false
+            return false
         end)
-    end))
-    return ctx
-end
+        return ok and sent == true
+    end
 
-return Runtime
+    local function interactBody()
+        runAction("Kiểm tra 1 xác", "Section1", function(ctx)
+            local candidate = selectPrompt(safeFolder({"Section1", "DeadCivilians"}))
+            if not candidate then return notify(ctx.title, "Không có xác chưa kiểm tra với prompt hợp lệ.") end
+            interactOne(ctx, candidate.prompt, candidate.target)
+        end)
+    end
 
+    local function grabCutter()
+        promptAction("Bolt cutter", "Section1", {"Section1", "SchoolGatePart", "Truck", "BoltCutter", "Main", "ProximityPrompt"})
+    end
+
+    local function cutChain()
+        promptAction("Cắt 1 lượt xích", "Section1", {"Section1", "SchoolGatePart", "Gate", "Chain", "PromptPart", "ProximityPrompt"})
+    end
+
+    local function grabMedicalKit()
+        promptAction("Medical Kit", "Section2", {"Section2", "Items", "Bandage", "Handle", "ProximityPrompt"})
+    end
+
+    local function healHideo()
+        -- Known packet sequence from cc/229; source has no proven session/GUI schema.
+        -- This is a single explicit button action, never a background worker or TP route.
+        runAction("Heal Hideo", "Section2", function(ctx)
+            local reliable = getReliablePacket()
+            if not reliable then return notify(ctx.title, "Không tìm thấy Packet Reliable.") end
+            for _, event in ipairs({"Section2/HideoMinigameStarted", "Section2/HideoHealed", "Section2/HideoMinigameEnded"}) do
+                if not validContext(ctx) then return end
+                if not callPacket(reliable, event) then
+                    return notify(ctx.title, "Gửi yêu cầu thất bại; chưa xác nhận chữa xong.")
+                end
+            end
+            notify(ctx.title, "Đã gửi yêu cầu chữa. Cần bandage/phiên chữa hợp lệ; kiểm tra tiến độ game.")
+        end)
+    end
+
+    local function openLocker()
+        promptAction("Mở locker", "Section2", {"Section2", "MAINOBJECTIVE", "Locker", "LockerDoor", "ProximityPart", "ProximityPrompt"})
+    end
+
+    local function readDiary()
+        promptAction("Đọc diary", "Section2", {"Section2", "MAINOBJECTIVE", "Diary", "ProximityPrompt"})
+    end
+
+    local function exitSchool()
+        promptAction("Mở cửa ra trường", "Section2", {"Section2", "School", "Doors", "ExitDoor", "ProxPart", "ProximityPrompt"})
+    end
+
+    local function freezeOneSpider()
+        if not alive then return end
+        if frozenSpider then restoreSpider(false) end
+        local folder = safeFolder({"Section2", "MAINOBJECTIVE2", "Spiders"})
+        local nearest, best = nil, math.huge
+        for _, spider in ipairs(folder and folder:GetChildren() or {}) do
+            local root = spider.Name == "AkariSpider" and spider:FindFirstChild("RootPart")
+            local bone = root and root:FindFirstChild("Bone")
+            if bone and validPart(root) then
+                local distance = getDistance(root)
+                if distance < best then nearest, best = {model = spider, parent = root, bone = bone}, distance end
+            end
+        end
+        if not nearest then return notify("Freeze Spider", "Chưa thấy RootPart.Bone phù hợp; không đổi rig khác.") end
+        local ok = pcall(function() nearest.bone.Parent = nil end)
+        if not ok then return notify("Freeze Spider", "Không thể tạm giữ rig local trên executor này.") end
+        frozenSpider = nearest
+        frozenSpider.character = getChar()
+        notify("Freeze Spider", "Đã tạm tách Bone của 1 Spider ở client. Chưa xác nhận NPC trên server dừng.")
+    end
+
+    local function grabKeycard()
+        promptAction("Keycard cửa Lab", "Section4", {"Section4", "Lab", "Floor1", "Entrance", "IDCARD", "ProximityPrompt"})
+    end
+
+    local function readLaptopPassword()
+        if not alive then return end
+        -- Read-only: never teleport, copy clipboard, submit a password, or reuse stale data.
+        local label = safeFolder({"Section4", "Lab", "Floor1", "Objective", "StickyNote", "PASSWORD", "SurfaceGui", "RandomNumber"})
+        local ok, code = pcall(function()
+            return label and (label:IsA("TextLabel") or label:IsA("TextBox")) and label.Text or nil
+        end)
+        if not ok or type(code) ~= "string" or not code:find("%S") then
+            return notify("Mã laptop", "Chưa đọc được mã hiện tại. Khu/vật thể có thể chưa được tải.")
+        end
+        code = code:gsub("<[^>]*>", ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if code == "" then return notify("Mã laptop", "Chưa có mã hiện tại.") end
+        notify("Mã laptop", "Mã hiện tại: " .. code)
+    end
+
+    local function placeC4(stage)
+        runAction("Đặt 1 C4 #" .. stage, "Section4", function(ctx)
+            local folder = safeFolder({"Section4", "Lab", "Floor1", stage == 1 and "Objective2" or "Objective3", "C4Explode"})
+            local candidate = selectPrompt(folder, function(obj) return obj.Name == "C4Bomb" end)
+            if not candidate then
+                return notify(ctx.title, "Chưa có C4 hợp lệ; cần mở đúng giai đoạn trước.")
+            end
+            -- Objective3 being loaded with an enabled prompt is required. Do not replay
+            -- the old two-tween route or silently advance a preceding objective.
+            interactOne(ctx, candidate.prompt, candidate.target)
+        end)
+    end
+
+    local function hitSkillCheck()
+        runAction("Lock Threat • 1 nhịp", "Section4", function(ctx)
+            if not safeFolder({"Section4", "Lab"}) then return notify(ctx.title, "Lab chưa được tải.") end
+            if callPacket(getReliablePacket(), "Section4/LockdownSkillCheckHit") then
+                notify(ctx.title, "Đã gửi 1 nhịp. Chỉ có tác dụng khi bạn đã mở đúng minigame.")
+            else
+                notify(ctx.title, "Không gửi được nhịp; chưa xác nhận kết quả.")
+            end
+        end)
+    end
+
+    local function activateMainSwitch()
+        promptAction("Main Switch", "Section5", {"Section5", "MainObjective", "PowerSwitch", "RootPart", "ProximityPrompt"})
+    end
+
+    local function cancelAction(announce)
+        generation += 1
+        busy = false
+        if announce then notify("Main", "Đã hủy các bước còn chờ. Thao tác đã gửi không thể thu hồi.") end
+    end
+
+    local respawnConnection = LocalPlayer.CharacterAdded:Connect(function()
+        cancelAction(false)
+        restoreSpider(false)
+    end)
+    local heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
+        freezeAccumulator += dt
+        if freezeAccumulator < 0.8 then return end
+        freezeAccumulator = 0
+        if frozenSpider and (getChar() ~= frozenSpider.character or not frozenSpider.model.Parent) then restoreSpider(false) end
+    end)
+
+    return {
+        setTeleport = function(enabled) useTeleport = enabled and true or false end,
+        cancel = function() cancelAction(true) end,
+        interactAllBodies = interactBody,
+        grabCutter = grabCutter,
+        cutChain = cutChain,
+        tpMika = function()
+            local trigger = safeFolder({"Section1", "Monster", "Trigger"})
+            pointAction("TP Mika", "Section1", objectCFrame(trigger), trigger)
+        end,
+        tpCityHideo = function()
+            local hideo = safeFolder({"Section1", "HideoScene", "Hideo2"})
+            pointAction("TP Hideo City", "Section1", objectCFrame(hideo), hideo)
+        end,
+        grabMedicalKit = grabMedicalKit,
+        tpSchoolHideo = function() pointAction("TP Hideo School", "Section2", CFrame.new(175, 8, 338)) end,
+        healHideo = healHideo,
+        tpLocker = function() pointAction("TP Locker", "Section2", CFrame.new(143, 20, 504)) end,
+        openLocker = openLocker,
+        readDiary = readDiary,
+        exitSchool = exitSchool,
+        tpSchoolExit = function() pointAction("TP cửa ra trường", "Section2", CFrame.new(175, 8, 508)) end,
+        tpForest = function() pointAction("TP Forest", "Section2", CFrame.new(-197, 50, 338)) end,
+        freezeOneSpider = freezeOneSpider,
+        restoreSpider = function() restoreSpider(true) end,
+        tpForestCave = function()
+            local target = safeFolder({"Section3", "Trigger"})
+            pointAction("TP cửa hang", "Section3", objectCFrame(target), target)
+        end,
+        tpIJOEntrance = function()
+            local target = safeFolder({"Section3", "OBJECTIVE", "Trigger2"})
+            pointAction("TP IJO Entrance", "Section3", objectCFrame(target), target)
+        end,
+        grabKeycard = grabKeycard,
+        readLaptopPassword = readLaptopPassword,
+        placeC4First = function() placeC4(1) end,
+        placeC4Second = function() placeC4(2) end,
+        tpIJOExit = function() pointAction("TP lối ra IJO", "Section4", CFrame.new(-3379, -300, 4451)) end,
+        hitSkillCheck = hitSkillCheck,
+        tpStairEnd = function()
+            local target = safeFolder({"Section5", "StairsSection", "EndTrigger"})
+            pointAction("TP cuối cầu thang", "Section5", objectCFrame(target), target)
+        end,
+        activateMainSwitch = activateMainSwitch,
+        cleanup = function()
+            if not alive then return end
+            alive = false
+            cancelAction(false)
+            restoreSpider(false)
+            respawnConnection:Disconnect()
+            heartbeatConnection:Disconnect()
+        end,
+    }
 end)()
 
-local E = (getgenv and getgenv()) or _G
+-- ══════════════════════════════════════════════════════════════════════════════
+-- UI: WindUI compact layout (mobile + PC balanced)
+-- Logic phía trên được giữ nguyên; block này chỉ đổi giao diện và input tốc độ.
+-- ══════════════════════════════════════════════════════════════════════════════
+function clampNumber(value, minValue, maxValue, fallback)
+    local n
+    local t = typeof(value)
 
-return Runtime.start({Scope="Book3",Modules=Modules,UIUrl=E.MimicCCUIUrl or "https://raw.githubusercontent.com/eystearisdown/wyattrz/main/ui/CCUI.lua"})
+    if t == "number" then
+        n = value
+    elseif t == "string" then
+        n = tonumber((value:gsub(",", ".")))
+    elseif t == "Instance" then
+        pcall(function()
+            if value:IsA("TextBox") or value:IsA("TextLabel") or value:IsA("TextButton") then
+                n = tonumber((value.Text or ""):gsub(",", "."))
+            end
+        end)
+    elseif t == "table" then
+        for _, key in ipairs({"Value", "value", "Text", "text", "Input", "input", "CurrentValue", "currentValue"}) do
+            local ok, raw = pcall(function() return value[key] end)
+            if ok and raw ~= nil then
+                local got = clampNumber(raw, minValue, maxValue, nil)
+                if got ~= nil then
+                    n = got
+                    break
+                end
+            end
+        end
+    else
+        n = tonumber(tostring(value or ""):gsub(",", "."))
+    end
 
-]====]
-local E = (getgenv and getgenv()) or _G
-E.__MimicSlateSources = E.__MimicSlateSources or {}
-E.__MimicSlateSources["Book3"] = PAYLOAD
-local run, compileError = loadstring(PAYLOAD, "MimicSlate/Book3")
-if not run then error(compileError, 0) end
-return run()
+    if not n then return fallback end
+    if n ~= n or n == math.huge or n == -math.huge then return fallback end
+    return math.clamp(n, minValue, maxValue)
+end
+
+function loadWindUI()
+    local sources = {
+        "https://raw.githubusercontent.com/eystearisdown/mm2/refs/heads/main/main.lua",
+    }
+
+    local function cacheBust(url)
+        local sep = url:find("?", 1, true) and "&" or "?"
+        local stamp = tostring(os.time()) .. "-" .. tostring(math.floor((os.clock() or 0) * 1000000)) .. "-" .. tostring(math.random(100000, 999999))
+        return url .. sep .. "nevoirs_cb=" .. stamp
+    end
+
+    local function badSource(source)
+        if type(source) ~= "string" then
+            return true, "source_not_string"
+        end
+        if #source < 1024 then
+            return true, "source_too_short_" .. tostring(#source)
+        end
+
+        local head = source:sub(1, 6000)
+        local lower = head:lower()
+        if source:sub(1, 3) == "429" or lower:find("too many requests", 1, true) then
+            return true, "github_429"
+        end
+        if lower:find("<!doctype", 1, true) or lower:find("<html", 1, true) then
+            return true, "html_response"
+        end
+        if lower:find("rate limit", 1, true) then
+            return true, "rate_limited"
+        end
+        if lower:find("not found", 1, true) and #source < 10000 then
+            return true, "not_found"
+        end
+
+        return false, nil
+    end
+
+    local lastErr = "unknown"
+
+    for attempt = 1, 2 do
+        for index, baseUrl in ipairs(sources) do
+            local url = cacheBust(baseUrl)
+            local okGet, source = pcall(function()
+                return game:HttpGet(url, true)
+            end)
+
+            if okGet then
+                local bad, reason = badSource(source)
+                if not bad then
+                    local fn, loadErr = loadstring(source)
+                    if fn then
+                        local okRun, lib = pcall(fn)
+                        if okRun and lib then
+                            warn("[Nevoirs] WindUI loaded from source #" .. tostring(index) .. " attempt " .. tostring(attempt))
+                            return lib
+                        end
+                        lastErr = "run_failed_source_" .. tostring(index) .. ": " .. tostring(lib)
+                    else
+                        lastErr = "compile_failed_source_" .. tostring(index) .. ": " .. tostring(loadErr)
+                    end
+                else
+                    lastErr = "bad_source_" .. tostring(index) .. ": " .. tostring(reason)
+                end
+            else
+                lastErr = "http_failed_source_" .. tostring(index) .. ": " .. tostring(source)
+            end
+        end
+        task.wait(0.35 * attempt)
+    end
+
+    warn("[Nevoirs] WindUI load failed: " .. tostring(lastErr))
+    return nil
+end
+
+
+function __InstallCompactNotify(ui, fallbackTitle)
+    if not ui or ui.__FiHonCompactNotifyInstalled then return end
+    ui.__FiHonCompactNotifyInstalled = true
+
+    local Players_Notify = game:GetService("Players")
+    local TweenService_Notify = game:GetService("TweenService")
+    local UserInputService_Notify = game:GetService("UserInputService")
+    local LocalPlayer_Notify = Players_Notify.LocalPlayer
+    local DEFAULT_NOTIFY_ICON = rawget(_G, "NEVOIRS_UI_ICON") or (typeof(NEVOIRS_UI_ICON) == "string" and NEVOIRS_UI_ICON) or "rbxassetid://17617869383"
+
+    local function resolveNotifyIcon(icon)
+        icon = tostring(icon or "")
+        if icon:find("rbxassetid://", 1, true) then return icon end
+        if icon:match("^%d+$") then return "rbxassetid://" .. icon end
+        return DEFAULT_NOTIFY_ICON
+    end
+
+    local function getNotifyHolder()
+        local pg = LocalPlayer_Notify and LocalPlayer_Notify:FindFirstChildOfClass("PlayerGui")
+        if not pg then return nil end
+
+        local gui = pg:FindFirstChild("FiHon_CompactNotifications")
+        if not gui then
+            gui = Instance.new("ScreenGui")
+            gui.Name = "FiHon_CompactNotifications"
+            gui.ResetOnSpawn = false
+            gui.IgnoreGuiInset = true
+            gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+            gui.DisplayOrder = 999999
+            gui.Parent = pg
+        end
+
+        local holder = gui:FindFirstChild("Holder")
+        if not holder then
+            holder = Instance.new("Frame")
+            holder.Name = "Holder"
+            holder.AnchorPoint = Vector2.new(1, 1)
+            holder.Position = UDim2.new(1, -8, 1, -12)
+            holder.BackgroundTransparency = 1
+            holder.BorderSizePixel = 0
+            holder.Parent = gui
+
+            local layout = Instance.new("UIListLayout")
+            layout.Name = "Layout"
+            layout.FillDirection = Enum.FillDirection.Vertical
+            layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+            layout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+            layout.SortOrder = Enum.SortOrder.LayoutOrder
+            layout.Padding = UDim.new(0, 4)
+            layout.Parent = holder
+        end
+
+        local width = UserInputService_Notify.TouchEnabled and 206 or 224
+        holder.Size = UDim2.new(0, width, 1, -24)
+        return holder
+    end
+
+    local function compactNotify(payload)
+        payload = (typeof(payload) == "table") and payload or { Content = tostring(payload or "") }
+        local holder = getNotifyHolder()
+        if not holder then return end
+
+        local touch = UserInputService_Notify.TouchEnabled
+        local w = touch and 206 or 224
+        local h = touch and 44 or 48
+        local duration = 2
+
+        local card = Instance.new("Frame")
+        card.Name = "CompactNotify"
+        card.Size = UDim2.fromOffset(w, h)
+        card.LayoutOrder = math.floor(os.clock() * 100000)
+        card.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
+        card.BackgroundTransparency = 1
+        card.BorderSizePixel = 0
+        card.ClipsDescendants = true
+        card.Parent = holder
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 10)
+        corner.Parent = card
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Thickness = 1
+        stroke.Transparency = 1
+        stroke.Color = Color3.fromRGB(78, 158, 230)
+        stroke.Parent = card
+
+        local iconImg = Instance.new("TextLabel")
+        iconImg.Name = "Icon"
+        iconImg.BackgroundTransparency = 1
+        iconImg.Position = UDim2.fromOffset(10, touch and 8 or 9)
+        iconImg.Size = UDim2.fromOffset(touch and 22 or 24, touch and 26 or 28)
+        iconImg.Font = Enum.Font.GothamBold
+        iconImg.Text = NEVOIRS_BRAND_TEXT
+        iconImg.TextSize = touch and 14 or 15
+        iconImg.TextColor3 = NEVOIRS_BRAND_COLOR
+        iconImg.TextTransparency = 1
+        iconImg.Parent = card
+        local title = Instance.new("TextLabel")
+        title.Name = "Title"
+        title.BackgroundTransparency = 1
+        title.Position = UDim2.fromOffset(touch and 39 or 43, 5)
+        title.Size = UDim2.new(1, touch and -48 or -54, 0, touch and 15 or 17)
+        title.Font = Enum.Font.GothamSemibold
+        title.TextSize = touch and 11 or 12
+        title.TextColor3 = Color3.fromRGB(245, 247, 255)
+        title.TextTransparency = 1
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.TextYAlignment = Enum.TextYAlignment.Center
+        title.TextTruncate = Enum.TextTruncate.AtEnd
+        title.RichText = true
+        title.Text = tostring(payload.Title or fallbackTitle or "Notification")
+        title.Parent = card
+
+        local content = Instance.new("TextLabel")
+        content.Name = "Content"
+        content.BackgroundTransparency = 1
+        content.Position = UDim2.fromOffset(touch and 39 or 43, touch and 22 or 24)
+        content.Size = UDim2.new(1, touch and -48 or -54, 0, touch and 17 or 18)
+        content.Font = Enum.Font.Gotham
+        content.TextSize = touch and 9 or 10
+        content.TextColor3 = Color3.fromRGB(215, 222, 235)
+        content.TextTransparency = 1
+        content.TextXAlignment = Enum.TextXAlignment.Left
+        content.TextYAlignment = Enum.TextYAlignment.Top
+        content.TextWrapped = false
+        content.TextTruncate = Enum.TextTruncate.AtEnd
+        content.RichText = true
+        content.Text = tostring(payload.Content or payload.Text or "")
+        content.Parent = card
+
+        pcall(function()
+            TweenService_Notify:Create(card, TweenInfo.new(0.12), {BackgroundTransparency = 0.36}):Play()
+            TweenService_Notify:Create(stroke, TweenInfo.new(0.12), {Transparency = 0.50}):Play()
+            TweenService_Notify:Create(iconImg, TweenInfo.new(0.12), {TextTransparency = 0}):Play()
+            TweenService_Notify:Create(title, TweenInfo.new(0.12), {TextTransparency = 0}):Play()
+            TweenService_Notify:Create(content, TweenInfo.new(0.12), {TextTransparency = 0}):Play()
+        end)
+
+        task.delay(duration, function()
+            if not card or not card.Parent then return end
+            pcall(function()
+                TweenService_Notify:Create(card, TweenInfo.new(0.16), {BackgroundTransparency = 1}):Play()
+                TweenService_Notify:Create(stroke, TweenInfo.new(0.16), {Transparency = 1}):Play()
+                TweenService_Notify:Create(iconImg, TweenInfo.new(0.16), {TextTransparency = 1}):Play()
+                TweenService_Notify:Create(title, TweenInfo.new(0.16), {TextTransparency = 1}):Play()
+                TweenService_Notify:Create(content, TweenInfo.new(0.16), {TextTransparency = 1}):Play()
+            end)
+            task.wait(0.18)
+            pcall(function() card:Destroy() end)
+        end)
+
+        return card
+    end
+
+    ui.__FiHonOriginalNotify = ui.Notify
+    ui.Notify = function(self, payload)
+        if payload == nil and typeof(self) == "table" and (self.Title or self.Content or self.Text or self.Duration) then
+            payload = self
+        end
+        return compactNotify(payload)
+    end
+end
+
+
+local runtimeCleanupDone = false
+local function cleanupNevoirsRuntime()
+    if runtimeCleanupDone then return end
+    runtimeCleanupDone = true
+    InstantInteract:stop()
+    TaskAssist.cancel()
+
+    States.TPWalk = false
+    States.Noclip = false
+    States.Moonwalk = false
+    States.InfiniteJump = false
+    States.Fullbright = false
+    States.VFly = false
+    States.ESPPlayer = false
+    States.ESPMonster = false
+    States.ESPTaskMaster = false
+    States.ESPTaskBody = false
+    States.ESPTaskSpider = false
+    States.ESPTaskGenerator = false
+    States.ESPTaskTerminal = false
+    States.ESPTaskValve = false
+    States.ESPTaskWire = false
+    States.ESPTaskDirector = false
+    States.ESPTaskExtra = false
+    States.AutoNearbyKill = false
+    States.AutoYenESP = false
+    States.AutoYenCollect = false
+    States.BossRadar = false
+
+    CAMERAREPLICA = nil
+    AutoNearbyKillTarget = nil
+    if NearbyEngine then pcall(function() NearbyEngine:Destroy() end) end
+    if Radar3D and Radar3D.Destroy then pcall(function() Radar3D:Destroy() end) end
+    if Phase and Phase.cleanup then pcall(Phase.cleanup) end
+    if Extra and Extra.cleanup then pcall(Extra.cleanup) end
+
+    local function disconnect(conn)
+        if conn then pcall(function() conn:Disconnect() end) end
+    end
+
+    disconnect(tpwalkConn); tpwalkConn = nil
+    disconnect(noclipConn); noclipConn = nil
+    disconnect(moonwalkConn); moonwalkConn = nil
+    disconnect(ijConn); ijConn = nil
+    disconnect(fbConn); fbConn = nil
+    disconnect(vflyConn); vflyConn = nil
+    disconnect(vflyStateConn); vflyStateConn = nil
+    disconnect(taskPollConn); taskPollConn = nil
+    disconnect(characterAddedConn); characterAddedConn = nil
+    disconnect(radarConn); radarConn = nil
+    disconnect(playerGuiDescConn); playerGuiDescConn = nil
+
+    for _, conn in ipairs(playerCharConns) do disconnect(conn) end
+    table.clear(playerCharConns)
+
+    for cat in pairs(pollConns) do
+        stopPoll(cat)
+    end
+    for cat in pairs(espPool) do
+        clearPool(cat)
+    end
+
+    restoreNoclipCollision()
+    clearMoonwalkAutoRotate()
+    cleanVFly()
+    if vflyHumanoid and vflyHumanoid.Parent and vflyOldWalkSpeed ~= nil then
+        pcall(function()
+            vflyHumanoid.WalkSpeed = vflyOldWalkSpeed
+            vflyHumanoid:ChangeState(Enum.HumanoidStateType.Running)
+        end)
+    end
+    vflyHumanoid = nil
+    vflyOldWalkSpeed = nil
+
+    pcall(function()
+        Lighting.Brightness = OrigLighting.Brightness
+        Lighting.GlobalShadows = OrigLighting.GlobalShadows
+        Lighting.OutdoorAmbient = OrigLighting.OutdoorAmbient
+        Lighting.Ambient = OrigLighting.Ambient
+        Lighting.FogEnd = OrigLighting.FogEnd
+    end)
+
+    pcall(function() if RadarGui and RadarGui.Parent then RadarGui:Destroy() end end)
+    pcall(function() if ScreenGui and ScreenGui.Parent then ScreenGui:Destroy() end end)
+
+    local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        for _, name in ipairs({"Nevoirs_LeftToggle_UI", "FiHon_CompactNotifications"}) do
+            local gui = pg:FindFirstChild(name)
+            if gui then pcall(function() gui:Destroy() end) end
+        end
+    end
+
+    pcall(function()
+        if Window and Window.Destroy then Window:Destroy() end
+    end)
+end
+
+_G.__NevoirsB3C1Cleanup = cleanupNevoirsRuntime
+
+WindUI = loadWindUI()
+if not WindUI then
+    warn("[Nevoirs - Rage] Không tải được WindUI. Hãy kiểm tra HttpGet/GitHub trong executor.")
+    cleanupNevoirsRuntime()
+    return
+end
+
+pcall(function() WindUI:SetTheme("Dark") end)
+pcall(function() WindUI.TransparencyValue = 0.12 end)
+pcall(function() __InstallCompactNotify(WindUI, "Nevoirs") end)
+
+-- Setting Auto Nearby Kill giờ nằm trực tiếp trong WindUI (không còn overlay riêng).
+setFireSettingsPanelVisible = function(_) end
+
+function getWindowSize()
+    local camera = Workspace.CurrentCamera or workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(900, 600)
+    local touch = UserInputService.TouchEnabled
+    local small = touch or viewport.X < 760 or viewport.Y < 460
+    local ratio = 1.55 -- gần 4:3 nhưng kéo ngang dài hơn một chút; sidebar đã thu gọn để nhường main
+
+    if small then
+        local h = math.clamp(math.floor(viewport.Y * 0.78), 320, 430)
+        local maxW = math.max(420, math.min(math.floor(viewport.X * 0.92), 680))
+        local minW = math.min(480, maxW)
+        local w = math.clamp(math.floor(h * ratio), minW, maxW)
+        return UDim2.fromOffset(w, h), Vector2.new(w, h), Vector2.new(w, h), 118, false
+    end
+
+    return UDim2.fromOffset(650, 420), Vector2.new(650, 420), Vector2.new(650, 420), 122, false
+end
+
+windowSize, minSize, maxSize, sidebarWidth, canResize = getWindowSize()
+openButtonScale = UserInputService.TouchEnabled and 0.72 or 0.66
+BASE_UI_SCALE = UserInputService.TouchEnabled and 0.62 or 0.60
+DEFAULT_UI_SCALE = getNumberSetting("UIScale", BASE_UI_SCALE, 0.58, 0.90)
+BASE_TOGGLE_SIZE_SCALE = 1
+ToggleSizeScale = getNumberSetting("ToggleSizeScale", BASE_TOGGLE_SIZE_SCALE, 0.60, 2.20)
+
+Window = WindUI:CreateWindow({
+    Title = "Nevoirs - B3C1",
+    Icon = NEVOIRS_WINDOW_ICON,
+    Author = "Nevoirs",
+    Folder = "Nevoirs_B3C1",
+    Size = windowSize,
+    MinSize = minSize,
+    MaxSize = maxSize,
+    ToggleKey = Enum.KeyCode.RightControl,
+    Transparent = true,
+    Theme = "Dark",
+    Resizable = canResize,
+    SideBarWidth = sidebarWidth,
+    HideSearchBar = true,
+    ScrollBarEnabled = true,
+    Topbar = {
+        Height = UserInputService.TouchEnabled and 64 or 58,
+        ButtonsType = "Default",
+    },
+    OpenButton = {
+        Enabled = false,
+    },
+})
+
+MENU_AVATAR_SIZE = UserInputService.TouchEnabled and 56 or 52
+
+function __isUiChromeAvatar(obj)
+    local a = obj
+    while a do
+        local n = tostring(a.Name or "")
+        if n == "FiHon_LeftToggle_UI" or n == "Nevoirs_LeftToggle_UI" or n == "Nevoirs_WorkspaceFinder_Toggle" or n == "FiHon_CompactNotifications" then
+            return true
+        end
+        a = a.Parent
+    end
+    return false
+end
+
+function __isMenuIcon(obj)
+    if not (obj and (obj:IsA("ImageLabel") or obj:IsA("ImageButton"))) then return false end
+    local image = tostring(obj.Image or "")
+    return image == tostring(NEVOIRS_UI_ICON) or image:find("98606201759935", 1, true) ~= nil or image:find("106478063464970", 1, true) ~= nil
+end
+
+function styleMenuAvatarImage(obj)
+    if not __isMenuIcon(obj) then return end
+    -- Giữ màu asset gốc, không tint tím/xanh lên ảnh.
+    obj.ImageColor3 = Color3.fromRGB(255, 255, 255)
+    obj.ImageTransparency = 0
+    obj.ScaleType = Enum.ScaleType.Crop
+    obj.ClipsDescendants = true
+
+    local c = obj:FindFirstChildOfClass("UICorner") or Instance.new("UICorner")
+    c.CornerRadius = UDim.new(1, 0)
+    c.Parent = obj
+
+    if not __isUiChromeAvatar(obj) then
+        obj.Size = UDim2.fromOffset(MENU_AVATAR_SIZE, MENU_AVATAR_SIZE)
+        local st = obj:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
+        st.Thickness = 1.2
+        st.Transparency = 0.15
+        st.Color = Color3.fromRGB(78, 158, 230)
+        st.Parent = obj
+    end
+end
+
+function applyMenuAvatarChrome()
+    local playerGui = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not playerGui then return end
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        pcall(styleMenuAvatarImage, obj)
+    end
+end
+
+applyMenuAvatarChrome()
+task.delay(0.25, applyMenuAvatarChrome)
+task.delay(0.8, applyMenuAvatarChrome)
+playerGuiDescConn = nil
+pcall(function()
+    local playerGui = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if playerGui then
+        playerGuiDescConn = playerGui.DescendantAdded:Connect(function(obj)
+            task.defer(function()
+                pcall(styleMenuAvatarImage, obj)
+            end)
+        end)
+    end
+end)
+
+pcall(function()
+    Window:SetUIScale(DEFAULT_UI_SCALE)
+end)
+
+pcall(function()
+    if Window.EditOpenButton then
+        Window:EditOpenButton({ Enabled = false })
+    end
+end)
+
+
+
+-- Toggle tròn bên trái, cùng style Workspace Finder.
+windowOpen = true
+function toggleNevoirsWindow()
+    local ok = false
+    pcall(function()
+        if Window.Toggle then
+            Window:Toggle()
+            ok = true
+        end
+    end)
+    if ok then return end
+
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendKeyEvent(true, Enum.KeyCode.RightControl, false, game)
+        task.wait()
+        vim:SendKeyEvent(false, Enum.KeyCode.RightControl, false, game)
+        ok = true
+    end)
+    if ok then return end
+
+    windowOpen = not windowOpen
+    pcall(function() if Window.SetVisible then Window:SetVisible(windowOpen) end end)
+    pcall(function() if windowOpen and Window.Open then Window:Open() elseif (not windowOpen) and Window.Close then Window:Close() end end)
+    pcall(function() if windowOpen and Window.Show then Window:Show() elseif (not windowOpen) and Window.Hide then Window:Hide() end end)
+end
+
+function createNevoirsLeftToggle()
+    local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not pg then return end
+    local old = pg:FindFirstChild("Nevoirs_LeftToggle_UI")
+    if old then old:Destroy() end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "Nevoirs_LeftToggle_UI"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.DisplayOrder = 999998
+    gui.Parent = pg
+
+    local scale = math.clamp(tonumber(ToggleSizeScale) or 1, 0.60, 2.20)
+    local hitSize = math.floor((UserInputService.TouchEnabled and 46 or 42) * scale)
+    local visualSize = math.floor((UserInputService.TouchEnabled and 20 or 18) * scale)
+    local btn = Instance.new("ImageButton")
+    btn.Name = "NevoirsToggle"
+    btn.AnchorPoint = Vector2.new(0, 0.5)
+    -- Dịch toggle lên trên một chút, giữ vùng bấm trong suốt để mobile vẫn dễ chạm.
+    btn.Position = UDim2.new(0, 12, 0.5, -70)
+    btn.Size = UDim2.fromOffset(hitSize, hitSize)
+    btn.BackgroundTransparency = 1
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Image = ""
+    btn.Parent = gui
+
+    local logo = Instance.new("ImageLabel")
+    logo.Name = "Logo"
+    logo.AnchorPoint = Vector2.new(0.5, 0.5)
+    logo.Position = UDim2.fromScale(0.5, 0.5)
+    logo.Size = UDim2.fromOffset(visualSize + 10, visualSize + 10)
+    logo.BackgroundColor3 = Color3.fromRGB(13, 18, 28)
+    logo.BackgroundTransparency = 0.04
+    logo.BorderSizePixel = 0
+    logo.Image = NEVOIRS_AVATAR_ID
+    logo.ImageColor3 = Color3.fromRGB(255, 255, 255)
+    logo.ScaleType = Enum.ScaleType.Crop
+    logo.Parent = btn
+
+    local co = Instance.new("UICorner")
+    co.CornerRadius = UDim.new(1, 0)
+    co.Parent = logo
+    local st = Instance.new("UIStroke")
+    st.Thickness = 1.2
+    st.Transparency = 0.15
+    st.Color = NEVOIRS_BRAND_COLOR
+    st.Parent = logo
+
+    btn.MouseButton1Click:Connect(toggleNevoirsWindow)
+end
+
+createNevoirsLeftToggle()
+
+function applyNevoirsToggleSize()
+    local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not pg then return end
+
+    local gui = pg:FindFirstChild("Nevoirs_LeftToggle_UI")
+    local btn = gui and gui:FindFirstChild("NevoirsToggle")
+    local logo = btn and btn:FindFirstChild("Logo")
+    if not btn or not logo then return end
+
+    local scale = math.clamp(tonumber(ToggleSizeScale) or 1, 0.60, 2.20)
+    local hitSize = math.floor((UserInputService.TouchEnabled and 46 or 42) * scale)
+    local visualSize = math.floor((UserInputService.TouchEnabled and 20 or 18) * scale)
+
+    btn.Size = UDim2.fromOffset(hitSize, hitSize)
+    logo.Size = UDim2.fromOffset(visualSize + 8, visualSize + 8)
+
+    local st = logo:FindFirstChildOfClass("UIStroke")
+    if st then
+        st.Thickness = math.max(1, 1 * scale)
+    end
+end
+
+applyNevoirsToggleSize()
+
+-- Không ép icon rbxasset thành hình tròn nữa; giữ nguyên style ảnh gốc/WindUI.
+
+
+pcall(function()
+    WindUI:Notify({
+        Title = "Nevoirs - B3C1",
+        Content = "CC Upgrade · Aura Test 1. Nút tròn bên trái để ẩn/hiện menu.",
+        Icon = "check",
+        Duration = 2,
+    })
+end)
+
+
+MainTab    = Window:Tab({ Title = "Main", Icon = "shield" })
+CombatTab  = Window:Tab({ Title = "Chiến đấu", Icon = "crosshair" })
+ESPTab     = Window:Tab({ Title = "ESP", Icon = "eye" })
+PlayerTab  = Window:Tab({ Title = "Cá nhân", Icon = "user" })
+SettingTab = Window:Tab({ Title = "Cài đặt", Icon = "settings" })
+
+function safeParagraph(tab, title, desc, icon)
+    pcall(function()
+        tab:Paragraph({
+            Title = title,
+            Desc = desc,
+            Image = icon,
+            ImageSize = 26,
+            Color = NEVOIRS_BRAND_COLOR,
+        })
+    end)
+end
+
+function safeDivider(tab)
+    pcall(function() tab:Divider() end)
+end
+
+COMPACT_CONTROLS = true
+
+function setElementVisible(element, visible)
+    if not element then return end
+    pcall(function() if element.SetVisible then element:SetVisible(visible) end end)
+    pcall(function() if element.Visible ~= nil then element.Visible = visible end end)
+    pcall(function() if element.Instance and element.Instance.Visible ~= nil then element.Instance.Visible = visible end end)
+    pcall(function() if element.Frame and element.Frame.Visible ~= nil then element.Frame.Visible = visible end end)
+    pcall(function() if element.Container and element.Container.Visible ~= nil then element.Container.Visible = visible end end)
+    pcall(function() if element.ElementFrame then element.ElementFrame.Visible = visible end end)
+    pcall(function() if element.UIElements and element.UIElements.Main then element.UIElements.Main.Visible = visible end end)
+    pcall(function() for _, frame in pairs(element) do if type(frame) == "table" and frame.UIElements and frame.UIElements.Main then frame.UIElements.Main.Visible = visible end end end)
+end
+
+function addToggle(tab, title, desc, value, callback)
+    local ok, element = pcall(function()
+        local options = {
+            Title = title,
+            Value = value and true or false,
+            Callback = function(state)
+                local okCb, err = pcall(callback, state and true or false)
+                if not okCb then warn("[Nevoirs - Rage] Toggle lỗi:", title, err) end
+            end,
+        }
+        if not COMPACT_CONTROLS and desc and desc ~= "" then options.Desc = desc end
+        return tab:Toggle(options)
+    end)
+    if not ok then warn("[Nevoirs - Rage] Không tạo được toggle:", title, element) end
+    return element
+end
+
+function addButton(tab, title, desc, callback)
+    local ok, element = pcall(function()
+        local options = {
+            Title = title,
+            Callback = function()
+                task.spawn(function()
+                    local okCb, err = pcall(callback)
+                    if not okCb then warn("[Nevoirs - Rage] Button lỗi:", title, err) end
+                end)
+            end,
+        }
+        if not COMPACT_CONTROLS and desc and desc ~= "" then options.Desc = desc end
+        return tab:Button(options)
+    end)
+    if not ok then warn("[Nevoirs - Rage] Không tạo được button:", title, element) end
+    return element
+end
+
+function applyNumeric(title, rawValue, minValue, maxValue, callback)
+    local value = clampNumber(rawValue, minValue, maxValue, nil)
+    if value == nil then
+        warn("[Nevoirs - Rage] Giá trị không hợp lệ:", title, tostring(rawValue))
+        return
+    end
+    local okCb, err = pcall(callback, value)
+    if not okCb then warn("[Nevoirs - Rage] Number lỗi:", title, err) end
+end
+
+function addNumberInput(tab, title, desc, defaultText, minValue, maxValue, callback, stepValue, settingKey)
+    local defaultValue = clampNumber(defaultText, minValue, maxValue, minValue)
+    local function handle(input)
+        local value = clampNumber(input, minValue, maxValue, defaultValue)
+        if value == nil then value = defaultValue end
+        if settingKey then setSetting(settingKey, value) end
+        applyNumeric(title, value, minValue, maxValue, callback)
+    end
+    local okInput, inputElement = pcall(function()
+        local options = {
+            Title = title,
+            Value = tostring(defaultValue),
+            Type = "Input",
+            Placeholder = tostring(defaultValue),
+            Callback = handle,
+        }
+        if not COMPACT_CONTROLS and desc and desc ~= "" then options.Desc = desc end
+        return tab:Input(options)
+    end)
+    if not okInput then
+        warn("[Nevoirs - Rage] Không tạo được input:", title, inputElement)
+    end
+    handle(defaultValue)
+    return inputElement
+end
+
+-- MAIN / B3C1 PHASES
+safeParagraph(MainTab, "Radar & Nearby", "Điều khiển nhanh ngay tại Main.", "radar")
+addToggle(MainTab, "Radar la bàn", "Boss và vị trí bản thân trên mặt phẳng ngang.", false, setBossRadar)
+addNumberInput(MainTab, "Bán kính Radar", "Stud ngang; zoom không tăng tầm nhận hit.", BossRadarRange, 50, 5000, function(v)
+    BossRadarRange = v
+    if States.BossRadar then updateBossRadar() end
+end, 10, "BossRadarRange")
+Radar3D:BuildControls(MainTab)
+NearbyEngine.MainToggle = addToggle(MainTab, "Auto Nearby Kill", "", false, toggleAutoNearbyKill)
+
+safeDivider(MainTab)
+safeParagraph(MainTab, "Thao tác nhiệm vụ", "Mỗi lần bấm xử lý một mục; điều kiện tiến độ vẫn do game quyết định.", "settings-2")
+addToggle(MainTab, "TP tới mục tiêu khi tương tác", "Áp dụng xác, đồ nhiệm vụ, xích, locker, C4 và công tắc. Không áp dụng Terminal/Generator/Valve/Wire.", true, Phase.setTeleport)
+addButton(MainTab, "Hủy thao tác Main đang chờ", "", Phase.cancel)
+safeParagraph(MainTab, "A. City", "Section 1", "map-pin")
+addButton(MainTab, "Kiểm tra 1 xác gần nhất", "", Phase.interactAllBodies)
+addButton(MainTab, "Nhặt Bolt cutter", "", Phase.grabCutter)
+addButton(MainTab, "Cắt xích • 1 lượt", "Cần cutter/tiến độ hợp lệ; không gửi 4 lần liên tiếp.", Phase.cutChain)
+addButton(MainTab, "TP Mika", "", Phase.tpMika)
+addButton(MainTab, "TP Hideo", "", Phase.tpCityHideo)
+
+safeDivider(MainTab)
+safeParagraph(MainTab, "B. School", "Section 2", "school")
+addButton(MainTab, "Medical Kit", "", Phase.grabMedicalKit)
+addButton(MainTab, "TP Hideo", "", Phase.tpSchoolHideo)
+addButton(MainTab, "Heal Hideo • đã mở phiên chữa", "Cần bandage và mở phiên chữa trước; chỉ gửi yêu cầu một lần bấm.", Phase.healHideo)
+addButton(MainTab, "TP Locker", "", Phase.tpLocker)
+addButton(MainTab, "Mở Locker", "", Phase.openLocker)
+addButton(MainTab, "Đọc Diary", "", Phase.readDiary)
+addButton(MainTab, "Freeze 1 Spider • local thử nghiệm", "Tạm tách Bone có thể khôi phục; không bảo đảm dừng NPC server.", Phase.freezeOneSpider)
+addButton(MainTab, "Khôi phục Spider local", "", Phase.restoreSpider)
+addButton(MainTab, "TP tới cửa ra trường", "", Phase.tpSchoolExit)
+addButton(MainTab, "Mở cửa ra trường", "", Phase.exitSchool)
+addButton(MainTab, "TP tới Forest", "", Phase.tpForest)
+
+safeDivider(MainTab)
+safeParagraph(MainTab, "C. Jungle", "Section 3", "trees")
+addButton(MainTab, "TP tới cửa hang", "Một điểm đến; không tự đi tiếp.", Phase.tpForestCave)
+addButton(MainTab, "TP IJO Entrance", "Một điểm đến; không tự nối route từ cửa hang.", Phase.tpIJOEntrance)
+addButton(MainTab, "Fix Generator", "", autoGenerator)
+
+safeDivider(MainTab)
+safeParagraph(MainTab, "D. IJO", "Section 4", "building-2")
+addButton(MainTab, "Keycard", "", Phase.grabKeycard)
+addButton(MainTab, "Đọc mã Laptop • popup", "Chỉ đọc mã hiện tại; không TP hoặc tự nhập.", Phase.readLaptopPassword)
+addButton(MainTab, "C4 #1 • 1 quả", "", Phase.placeC4First)
+addButton(MainTab, "C4 #2 • 1 quả", "Cần mở đúng giai đoạn trước; không tự chạy route Netamo.", Phase.placeC4Second)
+addButton(MainTab, "Activate Terminals", "", autoTerminal)
+addButton(MainTab, "Turn Valves", "", autoValve)
+addButton(MainTab, "Lock Threat • 1 nhịp", "Mở minigame trước khi bấm; không tự căn thời điểm.", Phase.hitSkillCheck)
+addButton(MainTab, "TP lối ra IJO", "", Phase.tpIJOExit)
+
+safeDivider(MainTab)
+safeParagraph(MainTab, "E. Water", "Section 5", "waves")
+addButton(MainTab, "TP cuối cầu thang", "", Phase.tpStairEnd)
+addButton(MainTab, "Main Switch", "", Phase.activateMainSwitch)
+addButton(MainTab, "Auto Wire", "", autoWire)
+
+Extra.BuildUI(MainTab)
+
+-- CHIẾN ĐẤU
+NearbyEngine.BuildControls = function()
+-- Nearby controls: one authoritative mode, one worker, independent subsettings.
+safeParagraph(CombatTab,"Nearby Kill · bản test","Aura thử nhiều mục tiêu trong cùng nhịp; Auto sẽ fallback khi chưa thấy tiến độ.","crosshair")
+local function nkSetElement(element,value)
+    if not element then return end
+    if type(element.Set)=="function" then pcall(element.Set,element,value,false)
+    elseif type(element.SetValue)=="function" then pcall(element.SetValue,element,value,false) end
+end
+local nkSyncing=false
+local nkFocusToggle,nkAuraToggle
+nkFocusToggle=addToggle(CombatTab,"Tập trung một mục tiêu","",NearbyEngine.config.Mode=="Focus",function(on)
+    if nkSyncing then return end
+    if on then setNearbyKillMode("Focus") else
+        if NearbyEngine.config.Mode=="Focus" then setNearbyKillMode("Aura") end
+    end
+end)
+nkAuraToggle=addToggle(CombatTab,"Aura · tự dọn","",NearbyEngine.config.Mode=="Aura",function(on)
+    if nkSyncing then return end
+    if on then setNearbyKillMode("Aura") else
+        if NearbyEngine.config.Mode=="Aura" then setNearbyKillMode("Focus") end
+    end
+end)
+NearbyEngine.ModeSink=function(mode)
+    nkSyncing=true
+    nkSetElement(nkFocusToggle,mode=="Focus"); nkSetElement(nkAuraToggle,mode=="Aura")
+    nkSyncing=false
+end
+NearbyEngine.MasterSink=function(on)
+    if nkSyncing then return end
+    nkSyncing=true; nkSetElement(NearbyEngine.MainToggle,on); nkSyncing=false
+end
+local function nkToggle(list,title,key,setting)
+    local element=addToggle(CombatTab,title,"",NearbyEngine.config[key],function(on)
+        NearbyEngine:Configure(key,on,setting)
+    end)
+    table.insert(list,element); return element
+end
+local function nkNumber(list,title,key,min,max,step)
+    local element=addNumberInput(CombatTab,title,"",NearbyEngine.config[key],min,max,function(value)
+        NearbyEngine:Configure(key,value,"NKV2"..key)
+    end,step,"NKV2"..key)
+    table.insert(list,element); return element
+end
+local nkFocusSettings,nkAuraSettings,nkCommonSettings={},{},{}
+addToggle(CombatTab,"Thiết lập Tập trung","",false,function(on)
+    for _,e in ipairs(nkFocusSettings) do setElementVisible(e,on) end
+end)
+nkToggle(nkFocusSettings,"Chạm marker để ghim/bỏ ghim","ManualLock","NKV2ManualLock")
+nkNumber(nkFocusSettings,"Tạm bỏ khi chưa có tiến độ (s)","StallAfter",.5,15,.1)
+table.insert(nkFocusSettings,addButton(CombatTab,"Bỏ ghim / chọn lại theo camera","",function() NearbyEngine:ReleasePin() end))
+addToggle(CombatTab,"Thiết lập Aura","",false,function(on)
+    for _,e in ipairs(nkAuraSettings) do setElementVisible(e,on) end
+end)
+local nkLabels={Auto="Auto · Burst có fallback",Burst="Giữ Burst để test",Serial="Luân phiên"}
+local nkValues={"Auto · Burst có fallback","Giữ Burst để test","Luân phiên"}
+local okDropdown,nkTransport=pcall(function()
+    return CombatTab:Dropdown({Title="Cách xử lý Aura",Values=nkValues,Value=nkLabels[NearbyEngine.config.Transport],Callback=function(value)
+        if type(value)=="table" then value=value[1] end
+        for key,label in pairs(nkLabels) do if value==label then NearbyEngine:Configure("Transport",key,"NKV2Transport"); break end end
+    end})
+end)
+if okDropdown then table.insert(nkAuraSettings,nkTransport) else
+    for _,key in ipairs({"Auto","Burst","Serial"}) do
+        local selectedKey=key
+        table.insert(nkAuraSettings,addButton(CombatTab,nkLabels[key],"",function()
+            NearbyEngine:Configure("Transport",selectedKey,"NKV2Transport")
+            smallNotify("Aura",nkLabels[selectedKey])
+        end))
+    end
+end
+nkToggle(nkAuraSettings,"Tự fallback khi chưa có tiến độ","Fallback","NKV2Fallback")
+nkToggle(nkAuraSettings,"Ưu tiên Hogo / đe dọa gần","PriorityDanger","NKV2PriorityDanger")
+nkNumber(nkAuraSettings,"Mục tiêu tối đa mỗi nhịp","BatchSize",2,8,1)
+nkNumber(nkAuraSettings,"Khoảng nghỉ Burst (s)","BatchDelay",.05,2,.01)
+nkNumber(nkAuraSettings,"Cửa sổ đánh giá Burst (s)","TrialWindow",1,15,.1)
+nkNumber(nkAuraSettings,"Chờ trước khi thử Burst lại (s)","RetryAfter",3,60,1)
+nkNumber(nkAuraSettings,"Thời gian mỗi lượt đơn (s)","SerialDwell",.08,3,.01)
+table.insert(nkAuraSettings,addButton(CombatTab,"Đặt lại lượt thử Aura","",function() NearbyEngine:ResetTrial() end))
+table.insert(nkAuraSettings,addButton(CombatTab,"Lưu báo cáo test Aura","",function() NearbyEngine:SaveReport() end))
+addToggle(CombatTab,"Hiển thị và thiết lập chung","",false,function(on)
+    for _,e in ipairs(nkCommonSettings) do setElementVisible(e,on) end
+end)
+nkToggle(nkCommonSettings,"Glow mục tiêu đang xử lý","Glow","NKV2Glow")
+nkToggle(nkCommonSettings,"Marker target","Marker","NKV2Marker")
+nkToggle(nkCommonSettings,"Bảng trạng thái test","HUD","NKV2HUD")
+nkToggle(nkCommonSettings,"Tự trang bị Gun nếu có","AutoEquip","NKV2AutoEquip")
+for _,kind in ipairs({"Gata","Grunt","Muki","Hogo","FleshBlock","Spider"}) do
+    local k=kind; NearbyEngine.config["Allow"..k]=getSetting("NKV2Allow"..k,1)~=0
+    nkToggle(nkCommonSettings,"Xử lý "..k,"Allow"..k,"NKV2Allow"..k)
+end
+table.insert(nkCommonSettings,addNumberInput(CombatTab,"Delay lượt đơn (s)","",AutoKillConfig.FireDelay,.01,10,function(v) AutoKillConfig.FireDelay=v end,.01,"AutoKillFireDelay"))
+for _,spec in ipairs({{"Gata","RangeGata","AutoKillRangeGata"},{"Grunt","RangeGrunt","AutoKillRangeGrunt"},
+    {"Muki","RangeMuki","AutoKillRangeMuki"},{"Hogo","RangeHogo","AutoKillRangeHogo"},
+    {"FleshBlock","RangeFleshBlock","AutoKillRangeFleshBlock"},{"Spider","RangeSpider","AutoKillRangeSpider"}}) do
+    local label,key,setting=spec[1],spec[2],spec[3]
+    table.insert(nkCommonSettings,addNumberInput(CombatTab,"Tầm "..label,"",AutoKillConfig[key],0,9999,function(v)
+        AutoKillConfig[key]=v; AutoNearbyKillTarget=nil
+    end,1,setting))
+end
+for _,list in ipairs({nkFocusSettings,nkAuraSettings,nkCommonSettings}) do
+    for _,element in ipairs(list) do setElementVisible(element,false) end
+end
+NearbyEngine.ModeSink(NearbyEngine.config.Mode)
+
+end
+NearbyEngine.BuildControls()
+
+-- ESP
+safeParagraph(ESPTab, "ESP người chơi", "Highlight + tên + khoảng cách.", "users")
+addToggle(ESPTab, "Người chơi", "Bật ESP cho player khác.", false, setPlayerESP)
+
+safeDivider(ESPTab)
+safeParagraph(ESPTab, "ESP quái", "ESP và Radar là hai hệ thống độc lập.", "skull")
+addToggle(ESPTab, "Quái", "Bật ESP quái đang có trong map.", false, setMonsterESP)
+addToggle(ESPTab, "Creep", "Gata + Grunts + Muki.", true, function(v)
+    MonsterAllows.Gata = v
+    if States.ESPMonster then setMonsterESP(true) end
+end)
+addToggle(ESPTab, "Boss", "Boss/NM theo registry B3C1.", true, function(v)
+    MonsterAllows.Boss = v
+    if States.ESPMonster then setMonsterESP(true) end
+end)
+
+safeDivider(ESPTab)
+safeParagraph(ESPTab, "ESP nhiệm vụ", "Master + bộ lọc theo phase.", "list-check")
+addToggle(ESPTab, "Master ESP Nhiệm vụ", "", false, setTaskMasterESP)
+addToggle(ESPTab, "Xác", "", true, function(v) setTaskAllow("Body", v) end)
+addToggle(ESPTab, "Nhện", "", true, function(v) setTaskAllow("Spider", v) end)
+addToggle(ESPTab, "Máy phát", "", true, function(v) setTaskAllow("Generator", v) end)
+addToggle(ESPTab, "Terminal", "", true, function(v) setTaskAllow("Terminal", v) end)
+addToggle(ESPTab, "Van", "", true, function(v) setTaskAllow("Valve", v) end)
+addToggle(ESPTab, "Dây điện", "", true, function(v) setTaskAllow("Wire", v) end)
+addToggle(ESPTab, "Director", "", true, function(v) setTaskAllow("Director", v) end)
+addToggle(ESPTab, "Boulder Seal", "", true, function(v) setTaskAllow("BoulderSeal", v) end)
+addToggle(ESPTab, "Bolt Cutter", "", true, function(v) setTaskAllow("Cutter", v) end)
+addToggle(ESPTab, "Bandage", "", true, function(v) setTaskAllow("Bandage", v) end)
+addToggle(ESPTab, "Diary", "", true, function(v) setTaskAllow("Diary", v) end)
+addToggle(ESPTab, "Lab Keycard", "Thẻ cửa vào; riêng với thẻ Director.", true, function(v) setTaskAllow("EntranceCard", v) end)
+addToggle(ESPTab, "C4 • hai giai đoạn", "", true, function(v) setTaskAllow("C4", v) end)
+addToggle(ESPTab, "Main Switch", "", true, function(v) setTaskAllow("PowerSwitch", v) end)
+
+-- CÁ NHÂN
+safeParagraph(PlayerTab, "Di chuyển", "Các chức năng local player.", "user")
+TPWalkSpeedInput, VFlySpeedInput = nil, nil
+addToggle(PlayerTab, "TPWalk", "Dịch chuyển theo hướng di chuyển hiện tại.", false, function(v)
+    toggleTPWalk(v)
+    setElementVisible(TPWalkSpeedInput, v)
+end)
+TPWalkSpeedInput = addNumberInput(PlayerTab, "TPWalk • Tốc", "Nhập số thủ công.", TPWalkSpeed, 0, 9999, function(v)
+    TPWalkSpeed = v
+end, 0.1, "TPWalkSpeed")
+setElementVisible(TPWalkSpeedInput, false)
+
+addToggle(PlayerTab, "Noclip", "Tắt va chạm; khi tắt sẽ restore trạng thái cũ.", false, toggleNoclip)
+addToggle(PlayerTab, "Moonwalk", "Quay hướng nhân vật ngược camera.", false, toggleMoonwalk)
+addToggle(PlayerTab, "Nhảy vô hạn", "JumpRequest, hỗ trợ mobile/PC.", false, toggleInfiniteJump)
+addToggle(PlayerTab, "Sáng map", "Fullbright; tắt sẽ khôi phục ánh sáng gốc.", false, toggleFullbright)
+
+addToggle(PlayerTab, "VFly", "Bay theo camera, joystick mobile và WASD PC.", false, function(v)
+    toggleVFly(v)
+    setElementVisible(VFlySpeedInput, v)
+end)
+VFlySpeedInput = addNumberInput(PlayerTab, "VFly • Tốc", "Nhập số thủ công.", VFlySpeed, 0, 99999, function(v)
+    VFlySpeed = v
+end, 0.1, "VFlySpeed")
+setElementVisible(VFlySpeedInput, false)
+
+safeDivider(PlayerTab)
+safeParagraph(PlayerTab, "Tương tác & Yen", "Thiết lập nền dùng chung cho local player.", "hand")
+addToggle(PlayerTab, "Instant E", "Bỏ thời gian giữ tương tác; tắt để khôi phục. Giữ điều kiện khoảng cách của game.", false, function(v)
+    InstantInteract:setEnabled(v)
+end)
+addToggle(PlayerTab, "ESP Yen", "Đánh dấu Yen trong khu vực đang tải.", false, setYenESP)
+addToggle(PlayerTab, "Yen Aura", "Nhặt Yen trong 10 studs, dùng chung worker với ESP Yen.", false, setYenCollect)
+
+-- CÀI ĐẶT
+safeParagraph(SettingTab, "Giao diện", "Các giá trị được lưu trong workspace executor.", "settings")
+addNumberInput(SettingTab, "UI Scale", "Độ lớn tổng thể UI.", DEFAULT_UI_SCALE, 0.58, 0.90, function(v)
+    DEFAULT_UI_SCALE = math.clamp(tonumber(v) or DEFAULT_UI_SCALE, 0.58, 0.90)
+    pcall(function() Window:SetUIScale(DEFAULT_UI_SCALE) end)
+end, 0.01, "UIScale")
+
+addNumberInput(SettingTab, "Toggle Size", "Kích cỡ nút avatar ngoài màn hình.", ToggleSizeScale, 0.60, 2.20, function(v)
+    ToggleSizeScale = math.clamp(tonumber(v) or ToggleSizeScale or 1, 0.60, 2.20)
+    applyNevoirsToggleSize()
+end, 0.05, "ToggleSizeScale")
+
+pcall(function() MainTab:Select() end)
+print("[Nevoirs - B3C1] ✅ CC Upgrade · Aura Test 1 loaded")
+
