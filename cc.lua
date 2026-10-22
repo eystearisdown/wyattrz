@@ -1,4 +1,4 @@
--- CC Camera · B3C1 · original cc UI and camera target selection
+-- NEVOIRS Native UI 0.1 · Dusk layout / Signal details / Frost colors
 
 pcall(function()
     local pg = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
@@ -24,7 +24,7 @@ local LocalPlayer      = Players.LocalPlayer
 local Workspace        = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService       = game:GetService("HttpService")
-local WindUI -- one shared UI binding for all feature closures
+local NevoirsUI -- one shared UI binding for all feature closures
 
 -- Avatar/icon mặc định theo yêu cầu.
 local NEVOIRS_AVATAR_ID = "rbxassetid://98606201759935"
@@ -774,8 +774,8 @@ local Extra = (function()
         { key = "PowerSwitch", path = {"Section5","MainObjective","PowerSwitch"}, label = "Main Switch", prompt = true },
     }
     local function notify(title, text)
-        if WindUI and WindUI.Notify then
-            pcall(function() WindUI:Notify({ Title = title, Content = text, Icon = "smile", Duration = 4 }) end)
+        if NevoirsUI and NevoirsUI.Notify then
+            pcall(function() NevoirsUI:Notify({ Title = title, Content = text, Icon = "smile", Duration = 4 }) end)
         end
     end
     local function anchorFor(obj)
@@ -1827,7 +1827,7 @@ end)
 -- Bản này giữ UI/Fly gốc, chỉ sửa Auto: không TP, chỉ xử lý object gần nhất
 -- và dùng flow gần nhất với script 229. Không dùng chỉnh cự li client-side.
 -- ══════════════════════════════════════════════════════════════════════════════
--- WindUI is shared from the service declarations above.
+-- NevoirsUI is shared from the service declarations above.
 
 local function packetHasServerCall(packet)
     if not packet then return false end
@@ -1952,9 +1952,9 @@ local TaskAssist = { busy = nil, epoch = 0, hidden = {} }
 
 function TaskAssist.notify(title, message)
     print("[Nevoirs] " .. title .. ": " .. message)
-    if WindUI and WindUI.Notify then
+    if NevoirsUI and NevoirsUI.Notify then
         pcall(function()
-            WindUI:Notify({Title = title, Content = message, Duration = 4, Icon = "info"})
+            NevoirsUI:Notify({Title = title, Content = message, Duration = 4, Icon = "info"})
         end)
     end
 end
@@ -2538,7 +2538,7 @@ end
 -- Bản này sửa lại target-acquire: không phụ thuộc 1 remote cố định, tự refresh remote/part
 -- để tránh lỗi "lúc đầu shoot, những lần sau báo không có target".
 -- ══════════════════════════════════════════════════════════════════════════════
--- WindUI is forward-declared before task actions; do not shadow it here.
+-- NevoirsUI is forward-declared before task actions; do not shadow it here.
 local AutoNearbyKillRunning = false
 local AutoNearbyKillTarget = nil
 local CameraReplicaHookInstalled = false
@@ -2587,8 +2587,8 @@ local setFireSettingsPanelVisible = function() end
 
 local function smallNotify(title, content, icon)
     pcall(function()
-        if WindUI and WindUI.Notify then
-            WindUI:Notify({
+        if NevoirsUI and NevoirsUI.Notify then
+            NevoirsUI:Notify({
                 Title = title or "Nevoirs",
                 Content = content or "",
                 Icon = icon or AUTO_KILL_ICON,
@@ -3604,7 +3604,7 @@ local Phase = (function()
 end)()
 
 -- ══════════════════════════════════════════════════════════════════════════════
--- UI: WindUI compact layout (mobile + PC balanced)
+-- UI: NevoirsUI compact layout (mobile + PC balanced)
 -- Logic phía trên được giữ nguyên; block này chỉ đổi giao diện và input tốc độ.
 -- ══════════════════════════════════════════════════════════════════════════════
 function clampNumber(value, minValue, maxValue, fallback)
@@ -3641,7 +3641,7 @@ function clampNumber(value, minValue, maxValue, fallback)
     return math.clamp(n, minValue, maxValue)
 end
 
-function loadWindUI()
+function loadNevoirsUI()
     local sources = {
         "https://raw.githubusercontent.com/eystearisdown/wyattrz/main/ui.lua",
     }
@@ -3693,8 +3693,8 @@ function loadWindUI()
                     local fn, loadErr = loadstring(source)
                     if fn then
                         local okRun, lib = pcall(fn)
-                        if okRun and lib then
-                            warn("[Nevoirs] WindUI loaded from source #" .. tostring(index) .. " attempt " .. tostring(attempt))
+                        if okRun and type(lib) == "table" and lib.Id == "nevoirs-native" and type(lib.CreateWindow) == "function" then
+                            warn("[Nevoirs] NevoirsUI loaded from source #" .. tostring(index) .. " attempt " .. tostring(attempt))
                             return lib
                         end
                         lastErr = "run_failed_source_" .. tostring(index) .. ": " .. tostring(lib)
@@ -3711,174 +3711,11 @@ function loadWindUI()
         task.wait(0.35 * attempt)
     end
 
-    warn("[Nevoirs] WindUI load failed: " .. tostring(lastErr))
+    warn("[Nevoirs] NevoirsUI load failed: " .. tostring(lastErr))
     return nil
 end
 
 
-function __InstallCompactNotify(ui, fallbackTitle)
-    if not ui or ui.__FiHonCompactNotifyInstalled then return end
-    ui.__FiHonCompactNotifyInstalled = true
-
-    local Players_Notify = game:GetService("Players")
-    local TweenService_Notify = game:GetService("TweenService")
-    local UserInputService_Notify = game:GetService("UserInputService")
-    local LocalPlayer_Notify = Players_Notify.LocalPlayer
-    local DEFAULT_NOTIFY_ICON = rawget(_G, "NEVOIRS_UI_ICON") or (typeof(NEVOIRS_UI_ICON) == "string" and NEVOIRS_UI_ICON) or "rbxassetid://17617869383"
-
-    local function resolveNotifyIcon(icon)
-        icon = tostring(icon or "")
-        if icon:find("rbxassetid://", 1, true) then return icon end
-        if icon:match("^%d+$") then return "rbxassetid://" .. icon end
-        return DEFAULT_NOTIFY_ICON
-    end
-
-    local function getNotifyHolder()
-        local pg = LocalPlayer_Notify and LocalPlayer_Notify:FindFirstChildOfClass("PlayerGui")
-        if not pg then return nil end
-
-        local gui = pg:FindFirstChild("FiHon_CompactNotifications")
-        if not gui then
-            gui = Instance.new("ScreenGui")
-            gui.Name = "FiHon_CompactNotifications"
-            gui.ResetOnSpawn = false
-            gui.IgnoreGuiInset = true
-            gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-            gui.DisplayOrder = 999999
-            gui.Parent = pg
-        end
-
-        local holder = gui:FindFirstChild("Holder")
-        if not holder then
-            holder = Instance.new("Frame")
-            holder.Name = "Holder"
-            holder.AnchorPoint = Vector2.new(1, 1)
-            holder.Position = UDim2.new(1, -8, 1, -12)
-            holder.BackgroundTransparency = 1
-            holder.BorderSizePixel = 0
-            holder.Parent = gui
-
-            local layout = Instance.new("UIListLayout")
-            layout.Name = "Layout"
-            layout.FillDirection = Enum.FillDirection.Vertical
-            layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
-            layout.HorizontalAlignment = Enum.HorizontalAlignment.Right
-            layout.SortOrder = Enum.SortOrder.LayoutOrder
-            layout.Padding = UDim.new(0, 4)
-            layout.Parent = holder
-        end
-
-        local width = UserInputService_Notify.TouchEnabled and 206 or 224
-        holder.Size = UDim2.new(0, width, 1, -24)
-        return holder
-    end
-
-    local function compactNotify(payload)
-        payload = (typeof(payload) == "table") and payload or { Content = tostring(payload or "") }
-        local holder = getNotifyHolder()
-        if not holder then return end
-
-        local touch = UserInputService_Notify.TouchEnabled
-        local w = touch and 206 or 224
-        local h = touch and 44 or 48
-        local duration = 2
-
-        local card = Instance.new("Frame")
-        card.Name = "CompactNotify"
-        card.Size = UDim2.fromOffset(w, h)
-        card.LayoutOrder = math.floor(os.clock() * 100000)
-        card.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
-        card.BackgroundTransparency = 1
-        card.BorderSizePixel = 0
-        card.ClipsDescendants = true
-        card.Parent = holder
-
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 10)
-        corner.Parent = card
-
-        local stroke = Instance.new("UIStroke")
-        stroke.Thickness = 1
-        stroke.Transparency = 1
-        stroke.Color = Color3.fromRGB(78, 158, 230)
-        stroke.Parent = card
-
-        local iconImg = Instance.new("TextLabel")
-        iconImg.Name = "Icon"
-        iconImg.BackgroundTransparency = 1
-        iconImg.Position = UDim2.fromOffset(10, touch and 8 or 9)
-        iconImg.Size = UDim2.fromOffset(touch and 22 or 24, touch and 26 or 28)
-        iconImg.Font = Enum.Font.GothamBold
-        iconImg.Text = NEVOIRS_BRAND_TEXT
-        iconImg.TextSize = touch and 14 or 15
-        iconImg.TextColor3 = NEVOIRS_BRAND_COLOR
-        iconImg.TextTransparency = 1
-        iconImg.Parent = card
-        local title = Instance.new("TextLabel")
-        title.Name = "Title"
-        title.BackgroundTransparency = 1
-        title.Position = UDim2.fromOffset(touch and 39 or 43, 5)
-        title.Size = UDim2.new(1, touch and -48 or -54, 0, touch and 15 or 17)
-        title.Font = Enum.Font.GothamSemibold
-        title.TextSize = touch and 11 or 12
-        title.TextColor3 = Color3.fromRGB(245, 247, 255)
-        title.TextTransparency = 1
-        title.TextXAlignment = Enum.TextXAlignment.Left
-        title.TextYAlignment = Enum.TextYAlignment.Center
-        title.TextTruncate = Enum.TextTruncate.AtEnd
-        title.RichText = true
-        title.Text = tostring(payload.Title or fallbackTitle or "Notification")
-        title.Parent = card
-
-        local content = Instance.new("TextLabel")
-        content.Name = "Content"
-        content.BackgroundTransparency = 1
-        content.Position = UDim2.fromOffset(touch and 39 or 43, touch and 22 or 24)
-        content.Size = UDim2.new(1, touch and -48 or -54, 0, touch and 17 or 18)
-        content.Font = Enum.Font.Gotham
-        content.TextSize = touch and 9 or 10
-        content.TextColor3 = Color3.fromRGB(215, 222, 235)
-        content.TextTransparency = 1
-        content.TextXAlignment = Enum.TextXAlignment.Left
-        content.TextYAlignment = Enum.TextYAlignment.Top
-        content.TextWrapped = false
-        content.TextTruncate = Enum.TextTruncate.AtEnd
-        content.RichText = true
-        content.Text = tostring(payload.Content or payload.Text or "")
-        content.Parent = card
-
-        pcall(function()
-            TweenService_Notify:Create(card, TweenInfo.new(0.12), {BackgroundTransparency = 0.36}):Play()
-            TweenService_Notify:Create(stroke, TweenInfo.new(0.12), {Transparency = 0.50}):Play()
-            TweenService_Notify:Create(iconImg, TweenInfo.new(0.12), {TextTransparency = 0}):Play()
-            TweenService_Notify:Create(title, TweenInfo.new(0.12), {TextTransparency = 0}):Play()
-            TweenService_Notify:Create(content, TweenInfo.new(0.12), {TextTransparency = 0}):Play()
-        end)
-
-        task.delay(duration, function()
-            if not card or not card.Parent then return end
-            pcall(function()
-                TweenService_Notify:Create(card, TweenInfo.new(0.16), {BackgroundTransparency = 1}):Play()
-                TweenService_Notify:Create(stroke, TweenInfo.new(0.16), {Transparency = 1}):Play()
-                TweenService_Notify:Create(iconImg, TweenInfo.new(0.16), {TextTransparency = 1}):Play()
-                TweenService_Notify:Create(title, TweenInfo.new(0.16), {TextTransparency = 1}):Play()
-                TweenService_Notify:Create(content, TweenInfo.new(0.16), {TextTransparency = 1}):Play()
-            end)
-            task.wait(0.18)
-            pcall(function() card:Destroy() end)
-        end)
-
-        return card
-    end
-
-    ui.__FiHonOriginalNotify = ui.Notify
-    ui.Notify = function(self, payload)
-        if payload == nil and typeof(self) == "table" and (self.Title or self.Content or self.Text or self.Duration) then
-            payload = self
-        end
-        return compactNotify(payload)
-    end
-end
 
 
 local runtimeCleanupDone = false
@@ -3928,7 +3765,6 @@ local function cleanupNevoirsRuntime()
     disconnect(vflyStateConn); vflyStateConn = nil
     disconnect(taskPollConn); taskPollConn = nil
     disconnect(characterAddedConn); characterAddedConn = nil
-    disconnect(playerGuiDescConn); playerGuiDescConn = nil
 
     for _, conn in ipairs(playerCharConns) do disconnect(conn) end
     table.clear(playerCharConns)
@@ -3977,265 +3813,32 @@ end
 
 _G.__NevoirsB3C1Cleanup = cleanupNevoirsRuntime
 
-WindUI = loadWindUI()
-if not WindUI then
-    warn("[Nevoirs - Rage] Không tải được WindUI. Hãy kiểm tra HttpGet/GitHub trong executor.")
+NevoirsUI = loadNevoirsUI()
+if not NevoirsUI then
+    warn("[NEVOIRS] Không tải được ui.lua bản Native. Cần đưa đúng cả ui.lua và cc.lua mới lên wyattrz/main.")
     cleanupNevoirsRuntime()
     return
 end
 
-pcall(function() WindUI:SetTheme("Dark") end)
-pcall(function() WindUI.TransparencyValue = 0.12 end)
-pcall(function() __InstallCompactNotify(WindUI, "Nevoirs") end)
-
--- Setting Auto Nearby Kill giờ nằm trực tiếp trong WindUI (không còn overlay riêng).
-setFireSettingsPanelVisible = function(_) end
-
-function getWindowSize()
-    local camera = Workspace.CurrentCamera or workspace.CurrentCamera
-    local viewport = camera and camera.ViewportSize or Vector2.new(900, 600)
-    local touch = UserInputService.TouchEnabled
-    local small = touch or viewport.X < 760 or viewport.Y < 460
-    local ratio = 1.55 -- gần 4:3 nhưng kéo ngang dài hơn một chút; sidebar đã thu gọn để nhường main
-
-    if small then
-        local h = math.clamp(math.floor(viewport.Y * 0.78), 320, 430)
-        local maxW = math.max(420, math.min(math.floor(viewport.X * 0.92), 680))
-        local minW = math.min(480, maxW)
-        local w = math.clamp(math.floor(h * ratio), minW, maxW)
-        return UDim2.fromOffset(w, h), Vector2.new(w, h), Vector2.new(w, h), 118, false
-    end
-
-    return UDim2.fromOffset(650, 420), Vector2.new(650, 420), Vector2.new(650, 420), 122, false
-end
-
-windowSize, minSize, maxSize, sidebarWidth, canResize = getWindowSize()
-openButtonScale = UserInputService.TouchEnabled and 0.72 or 0.66
-BASE_UI_SCALE = UserInputService.TouchEnabled and 0.62 or 0.60
-DEFAULT_UI_SCALE = getNumberSetting("UIScale", BASE_UI_SCALE, 0.58, 0.90)
-BASE_TOGGLE_SIZE_SCALE = 1
-ToggleSizeScale = getNumberSetting("ToggleSizeScale", BASE_TOGGLE_SIZE_SCALE, 0.60, 2.20)
-
-Window = WindUI:CreateWindow({
-    Title = "Nevoirs - B3C1",
-    Icon = NEVOIRS_WINDOW_ICON,
-    Author = "Nevoirs",
-    Folder = "Nevoirs_B3C1",
-    Size = windowSize,
-    MinSize = minSize,
-    MaxSize = maxSize,
+DEFAULT_UI_SCALE = getNumberSetting("CustomUIScale", 1, 0.85, 1.15)
+ToggleSizeScale = getNumberSetting("ToggleSizeScale", 1, 0.60, 2.20)
+Window = NevoirsUI:CreateWindow({
+    Title = "NEVOIRS",
+    Subtitle = "B3C1 · NATIVE UI",
     ToggleKey = Enum.KeyCode.RightControl,
-    Transparent = true,
-    Theme = "Dark",
-    Resizable = canResize,
-    SideBarWidth = sidebarWidth,
-    HideSearchBar = true,
-    ScrollBarEnabled = true,
-    Topbar = {
-        Height = UserInputService.TouchEnabled and 64 or 58,
-        ButtonsType = "Default",
-    },
-    OpenButton = {
-        Enabled = false,
-    },
+    Scale = DEFAULT_UI_SCALE,
+    ToggleSize = ToggleSizeScale,
 })
 
-MENU_AVATAR_SIZE = UserInputService.TouchEnabled and 56 or 52
-
-function __isUiChromeAvatar(obj)
-    local a = obj
-    while a do
-        local n = tostring(a.Name or "")
-        if n == "FiHon_LeftToggle_UI" or n == "Nevoirs_LeftToggle_UI" or n == "Nevoirs_WorkspaceFinder_Toggle" or n == "FiHon_CompactNotifications" then
-            return true
-        end
-        a = a.Parent
-    end
-    return false
-end
-
-function __isMenuIcon(obj)
-    if not (obj and (obj:IsA("ImageLabel") or obj:IsA("ImageButton"))) then return false end
-    local image = tostring(obj.Image or "")
-    return image == tostring(NEVOIRS_UI_ICON) or image:find("98606201759935", 1, true) ~= nil or image:find("106478063464970", 1, true) ~= nil
-end
-
-function styleMenuAvatarImage(obj)
-    if not __isMenuIcon(obj) then return end
-    -- Giữ màu asset gốc, không tint tím/xanh lên ảnh.
-    obj.ImageColor3 = Color3.fromRGB(255, 255, 255)
-    obj.ImageTransparency = 0
-    obj.ScaleType = Enum.ScaleType.Crop
-    obj.ClipsDescendants = true
-
-    local c = obj:FindFirstChildOfClass("UICorner") or Instance.new("UICorner")
-    c.CornerRadius = UDim.new(1, 0)
-    c.Parent = obj
-
-    if not __isUiChromeAvatar(obj) then
-        obj.Size = UDim2.fromOffset(MENU_AVATAR_SIZE, MENU_AVATAR_SIZE)
-        local st = obj:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
-        st.Thickness = 1.2
-        st.Transparency = 0.15
-        st.Color = Color3.fromRGB(78, 158, 230)
-        st.Parent = obj
-    end
-end
-
-function applyMenuAvatarChrome()
-    local playerGui = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not playerGui then return end
-    for _, obj in ipairs(playerGui:GetDescendants()) do
-        pcall(styleMenuAvatarImage, obj)
-    end
-end
-
-applyMenuAvatarChrome()
-task.delay(0.25, applyMenuAvatarChrome)
-task.delay(0.8, applyMenuAvatarChrome)
-playerGuiDescConn = nil
-pcall(function()
-    local playerGui = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if playerGui then
-        playerGuiDescConn = playerGui.DescendantAdded:Connect(function(obj)
-            task.defer(function()
-                pcall(styleMenuAvatarImage, obj)
-            end)
-        end)
-    end
-end)
-
-pcall(function()
-    Window:SetUIScale(DEFAULT_UI_SCALE)
-end)
-
-pcall(function()
-    if Window.EditOpenButton then
-        Window:EditOpenButton({ Enabled = false })
-    end
-end)
-
-
-
--- Toggle tròn bên trái, cùng style Workspace Finder.
-windowOpen = true
-function toggleNevoirsWindow()
-    local ok = false
-    pcall(function()
-        if Window.Toggle then
-            Window:Toggle()
-            ok = true
-        end
-    end)
-    if ok then return end
-
-    pcall(function()
-        local vim = game:GetService("VirtualInputManager")
-        vim:SendKeyEvent(true, Enum.KeyCode.RightControl, false, game)
-        task.wait()
-        vim:SendKeyEvent(false, Enum.KeyCode.RightControl, false, game)
-        ok = true
-    end)
-    if ok then return end
-
-    windowOpen = not windowOpen
-    pcall(function() if Window.SetVisible then Window:SetVisible(windowOpen) end end)
-    pcall(function() if windowOpen and Window.Open then Window:Open() elseif (not windowOpen) and Window.Close then Window:Close() end end)
-    pcall(function() if windowOpen and Window.Show then Window:Show() elseif (not windowOpen) and Window.Hide then Window:Hide() end end)
-end
-
-function createNevoirsLeftToggle()
-    local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not pg then return end
-    local old = pg:FindFirstChild("Nevoirs_LeftToggle_UI")
-    if old then old:Destroy() end
-
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "Nevoirs_LeftToggle_UI"
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.DisplayOrder = 999998
-    gui.Parent = pg
-
-    local scale = math.clamp(tonumber(ToggleSizeScale) or 1, 0.60, 2.20)
-    local hitSize = math.floor((UserInputService.TouchEnabled and 46 or 42) * scale)
-    local visualSize = math.floor((UserInputService.TouchEnabled and 20 or 18) * scale)
-    local btn = Instance.new("ImageButton")
-    btn.Name = "NevoirsToggle"
-    btn.AnchorPoint = Vector2.new(0, 0.5)
-    -- Dịch toggle lên trên một chút, giữ vùng bấm trong suốt để mobile vẫn dễ chạm.
-    btn.Position = UDim2.new(0, 12, 0.5, -70)
-    btn.Size = UDim2.fromOffset(hitSize, hitSize)
-    btn.BackgroundTransparency = 1
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Image = ""
-    btn.Parent = gui
-
-    local logo = Instance.new("ImageLabel")
-    logo.Name = "Logo"
-    logo.AnchorPoint = Vector2.new(0.5, 0.5)
-    logo.Position = UDim2.fromScale(0.5, 0.5)
-    logo.Size = UDim2.fromOffset(visualSize + 10, visualSize + 10)
-    logo.BackgroundColor3 = Color3.fromRGB(13, 18, 28)
-    logo.BackgroundTransparency = 0.04
-    logo.BorderSizePixel = 0
-    logo.Image = NEVOIRS_AVATAR_ID
-    logo.ImageColor3 = Color3.fromRGB(255, 255, 255)
-    logo.ScaleType = Enum.ScaleType.Crop
-    logo.Parent = btn
-
-    local co = Instance.new("UICorner")
-    co.CornerRadius = UDim.new(1, 0)
-    co.Parent = logo
-    local st = Instance.new("UIStroke")
-    st.Thickness = 1.2
-    st.Transparency = 0.15
-    st.Color = NEVOIRS_BRAND_COLOR
-    st.Parent = logo
-
-    btn.MouseButton1Click:Connect(toggleNevoirsWindow)
-end
-
-createNevoirsLeftToggle()
-
 function applyNevoirsToggleSize()
-    local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not pg then return end
-
-    local gui = pg:FindFirstChild("Nevoirs_LeftToggle_UI")
-    local btn = gui and gui:FindFirstChild("NevoirsToggle")
-    local logo = btn and btn:FindFirstChild("Logo")
-    if not btn or not logo then return end
-
-    local scale = math.clamp(tonumber(ToggleSizeScale) or 1, 0.60, 2.20)
-    local hitSize = math.floor((UserInputService.TouchEnabled and 46 or 42) * scale)
-    local visualSize = math.floor((UserInputService.TouchEnabled and 20 or 18) * scale)
-
-    btn.Size = UDim2.fromOffset(hitSize, hitSize)
-    logo.Size = UDim2.fromOffset(visualSize + 8, visualSize + 8)
-
-    local st = logo:FindFirstChildOfClass("UIStroke")
-    if st then
-        st.Thickness = math.max(1, 1 * scale)
-    end
+    if Window then Window:SetToggleSize(ToggleSizeScale) end
 end
 
-applyNevoirsToggleSize()
-
--- Không ép icon rbxasset thành hình tròn nữa; giữ nguyên style ảnh gốc/WindUI.
-
-
-pcall(function()
-    WindUI:Notify({
-        Title = "Nevoirs - B3C1",
-        Content = "CC Camera. Nút tròn bên trái để ẩn/hiện menu.",
-        Icon = "check",
-        Duration = 2,
-    })
-end)
-
+NevoirsUI:Notify({
+    Title = "NEVOIRS · Native UI",
+    Content = "Bố cục Dusk · chi tiết Signal · màu Frost. Chạm N để thu/mở.",
+    Duration = 4,
+})
 
 MainTab    = Window:Tab({ Title = "Main", Icon = "shield" })
 CombatTab  = Window:Tab({ Title = "Chiến đấu", Icon = "crosshair" })
@@ -4259,7 +3862,7 @@ function safeDivider(tab)
     pcall(function() tab:Divider() end)
 end
 
-COMPACT_CONTROLS = true
+COMPACT_CONTROLS = false
 
 function setElementVisible(element, visible)
     if not element then return end
@@ -4279,6 +3882,7 @@ function addToggle(tab, title, desc, value, callback)
             Title = title,
             Value = value and true or false,
             Callback = function(state)
+                if runtimeCleanupDone then return end
                 local okCb, err = pcall(callback, state and true or false)
                 if not okCb then warn("[Nevoirs - Rage] Toggle lỗi:", title, err) end
             end,
@@ -4294,11 +3898,11 @@ function addButton(tab, title, desc, callback)
     local ok, element = pcall(function()
         local options = {
             Title = title,
+            Pinned = title == "Fix Generator" or title == "Đọc mã Laptop • popup" or title == "Activate Terminals",
             Callback = function()
-                task.spawn(function()
-                    local okCb, err = pcall(callback)
-                    if not okCb then warn("[Nevoirs - Rage] Button lỗi:", title, err) end
-                end)
+                if runtimeCleanupDone then return end
+                local okCb, err = pcall(callback)
+                if not okCb then warn("[NEVOIRS] Button lỗi:", title, err) end
             end,
         }
         if not COMPACT_CONTROLS and desc and desc ~= "" then options.Desc = desc end
@@ -4320,9 +3924,12 @@ end
 
 function addNumberInput(tab, title, desc, defaultText, minValue, maxValue, callback, stepValue, settingKey)
     local defaultValue = clampNumber(defaultText, minValue, maxValue, minValue)
+    local nativeInput
     local function handle(input)
+        if runtimeCleanupDone then return end
         local value = clampNumber(input, minValue, maxValue, defaultValue)
         if value == nil then value = defaultValue end
+        if nativeInput then nativeInput:Set(tostring(value), false) end
         if settingKey then setSetting(settingKey, value) end
         applyNumeric(title, value, minValue, maxValue, callback)
     end
@@ -4340,11 +3947,13 @@ function addNumberInput(tab, title, desc, defaultText, minValue, maxValue, callb
     if not okInput then
         warn("[Nevoirs - Rage] Không tạo được input:", title, inputElement)
     end
+    if okInput then nativeInput = inputElement end
     handle(defaultValue)
     return inputElement
 end
 
 -- MAIN / B3C1 PHASES
+MainTab:SetGroup("Quick")
 safeParagraph(MainTab, "Nearby Kill", "Ưu tiên mục tiêu theo hướng camera như cc gốc.", "crosshair")
 addToggle(MainTab, "Auto Nearby Kill", "Một mục tiêu mỗi nhịp; không tự di chuyển.", false, toggleAutoNearbyKill)
 
@@ -4352,6 +3961,7 @@ safeDivider(MainTab)
 safeParagraph(MainTab, "Thao tác nhiệm vụ", "Mỗi lần bấm xử lý một mục; điều kiện tiến độ vẫn do game quyết định.", "settings-2")
 addToggle(MainTab, "TP tới mục tiêu khi tương tác", "Áp dụng xác, đồ nhiệm vụ, xích, locker, C4 và công tắc. Không áp dụng Terminal/Generator/Valve/Wire.", true, Phase.setTeleport)
 addButton(MainTab, "Hủy thao tác Main đang chờ", "", Phase.cancel)
+MainTab:SetGroup("City")
 safeParagraph(MainTab, "A. City", "Section 1", "map-pin")
 addButton(MainTab, "Kiểm tra 1 xác gần nhất", "", Phase.interactAllBodies)
 addButton(MainTab, "Nhặt Bolt cutter", "", Phase.grabCutter)
@@ -4360,6 +3970,7 @@ addButton(MainTab, "TP Mika", "", Phase.tpMika)
 addButton(MainTab, "TP Hideo", "", Phase.tpCityHideo)
 
 safeDivider(MainTab)
+MainTab:SetGroup("School")
 safeParagraph(MainTab, "B. School", "Section 2", "school")
 addButton(MainTab, "Medical Kit", "", Phase.grabMedicalKit)
 addButton(MainTab, "TP Hideo", "", Phase.tpSchoolHideo)
@@ -4374,12 +3985,14 @@ addButton(MainTab, "Mở cửa ra trường", "", Phase.exitSchool)
 addButton(MainTab, "TP tới Forest", "", Phase.tpForest)
 
 safeDivider(MainTab)
+MainTab:SetGroup("Forest")
 safeParagraph(MainTab, "C. Jungle", "Section 3", "trees")
 addButton(MainTab, "TP tới cửa hang", "Một điểm đến; không tự đi tiếp.", Phase.tpForestCave)
 addButton(MainTab, "TP IJO Entrance", "Một điểm đến; không tự nối route từ cửa hang.", Phase.tpIJOEntrance)
 addButton(MainTab, "Fix Generator", "", autoGenerator)
 
 safeDivider(MainTab)
+MainTab:SetGroup("IJO")
 safeParagraph(MainTab, "D. IJO", "Section 4", "building-2")
 addButton(MainTab, "Keycard", "", Phase.grabKeycard)
 addButton(MainTab, "Đọc mã Laptop • popup", "Chỉ đọc mã hiện tại; không TP hoặc tự nhập.", Phase.readLaptopPassword)
@@ -4391,11 +4004,13 @@ addButton(MainTab, "Lock Threat • 1 nhịp", "Mở minigame trước khi bấm
 addButton(MainTab, "TP lối ra IJO", "", Phase.tpIJOExit)
 
 safeDivider(MainTab)
+MainTab:SetGroup("Water")
 safeParagraph(MainTab, "E. Water", "Section 5", "waves")
 addButton(MainTab, "TP cuối cầu thang", "", Phase.tpStairEnd)
 addButton(MainTab, "Main Switch", "", Phase.activateMainSwitch)
 addButton(MainTab, "Auto Wire", "", autoWire)
 
+MainTab:SetGroup("Egao")
 Extra.BuildUI(MainTab)
 
 -- CHIẾN ĐẤU
@@ -4488,16 +4103,18 @@ addToggle(PlayerTab, "Yen Aura", "Nhặt Yen trong 10 studs, dùng chung worker 
 
 -- CÀI ĐẶT
 safeParagraph(SettingTab, "Giao diện", "Các giá trị được lưu trong workspace executor.", "settings")
-addNumberInput(SettingTab, "UI Scale", "Độ lớn tổng thể UI.", DEFAULT_UI_SCALE, 0.58, 0.90, function(v)
-    DEFAULT_UI_SCALE = math.clamp(tonumber(v) or DEFAULT_UI_SCALE, 0.58, 0.90)
+addNumberInput(SettingTab, "UI Scale", "Cỡ giao diện Native; tự đổi bố cục theo màn hình.", DEFAULT_UI_SCALE, 0.85, 1.15, function(v)
+    DEFAULT_UI_SCALE = math.clamp(tonumber(v) or DEFAULT_UI_SCALE, 0.85, 1.15)
     pcall(function() Window:SetUIScale(DEFAULT_UI_SCALE) end)
-end, 0.01, "UIScale")
+end, 0.01, "CustomUIScale")
 
-addNumberInput(SettingTab, "Toggle Size", "Kích cỡ nút avatar ngoài màn hình.", ToggleSizeScale, 0.60, 2.20, function(v)
+addNumberInput(SettingTab, "Toggle Size", "Kích cỡ nút N thu/mở menu.", ToggleSizeScale, 0.60, 2.20, function(v)
     ToggleSizeScale = math.clamp(tonumber(v) or ToggleSizeScale or 1, 0.60, 2.20)
     applyNevoirsToggleSize()
 end, 0.05, "ToggleSizeScale")
 
-pcall(function() MainTab:Select() end)
-print("[Nevoirs - B3C1] ✅ CC Camera loaded")
+addButton(SettingTab, "Đóng script và dọn trạng thái", "Dừng các chức năng, khôi phục thay đổi local và đóng UI.", cleanupNevoirsRuntime)
+
+pcall(function() MainTab:SetGroupFilter("Quick"); MainTab:Select() end)
+print("[NEVOIRS] ✅ Native UI 0.1 loaded · Camera Nearby")
 
