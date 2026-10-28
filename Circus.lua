@@ -1,6 +1,6 @@
 --[[
     Nevoirs | Circus.lua | Nightmare Circus (The Mimic)
-    Standalone NMCS port
+    Standalone NMCS port / diagnostics v2 (2026 rebuild compatibility probe)
 
     Gameplay / packet logic: 2294168059.lua (NMCSFunc + PackNMCS + NMCS@Main)
     UI / visual direction: B3C1.lua + NativeUI.lua (compact avatar + ESP)
@@ -180,8 +180,12 @@ local function teleport(cf, token)
 end
 
 local function getPacket()
+    -- The 229 source calls :FireServer() on this exact object. Do not assume
+    -- the current build still uses precisely the same RemoteEvent class.
     local packet = at(ReplicatedStorage, "modules", "Packet", "Reliable")
-    if packet and packet:IsA("RemoteEvent") then return packet end
+    if packet and (packet:IsA("RemoteEvent") or packet:IsA("UnreliableRemoteEvent")) then
+        return packet
+    end
     return nil
 end
 
@@ -234,7 +238,7 @@ local function runOnce(label, fn)
         elseif result == false then
             notify(label, err or "Chưa thể thực hiện. Hãy kiểm tra minigame và F9.", "circle-alert")
         else
-            notify(label, "Đã gửi thao tác. Kết quả phụ thuộc trạng thái game.", "check")
+            notify(label, "Đã thực hiện lệnh local / gửi packet 229; CHƯA xác nhận server chấp nhận. Xem mục Chẩn đoán.", "info")
         end
     end)
 end
@@ -1043,21 +1047,134 @@ task.spawn(function()
 end)
 
 -- ==========================================================================
+-- Live diagnostic for October 2026 rebuilt Nightmare Circus.
+-- 229 is a historical packet map: a successful FireServer does NOT mean a
+-- new server accepted an old minigame command. This only reads local instances.
+-- It deliberately avoids guessing or firing unknown packets.
+-- ==========================================================================
+local function buildRuntimeReport()
+    local lines = {}
+    local function line(value) table.insert(lines, tostring(value)) end
+    local function describe(obj)
+        if not obj then return "MISSING" end
+        return "OK (" .. obj.ClassName .. ")"
+    end
+    local function listChildren(label, obj, maxN)
+        if not obj then
+            line(label .. ": MISSING")
+            return
+        end
+        local children = obj:GetChildren()
+        local n = math.min(#children, maxN or 30)
+        local parts = {}
+        for i = 1, n do
+            local child = children[i]
+            table.insert(parts, child.Name .. "<" .. child.ClassName .. ">")
+        end
+        line(label .. " [" .. #children .. "]: " .. table.concat(parts, ", ") .. (#children > n and " ...[truncated]" or ""))
+    end
+    local event = Workspace:GetAttribute("MimicEvent")
+    local s1 = Workspace:FindFirstChild("Section1")
+    local games = s1 and s1:FindFirstChild("Games")
+    local packets = at(ReplicatedStorage, "modules", "Packet")
+    local remote = packets and packets:FindFirstChild("Reliable")
+    line("=== NEVOIRS NMCS LIVE REPORT v2 (READ ONLY) ===")
+    line("GamePlaceId: " .. tostring(game.PlaceId))
+    line("MimicEvent: " .. tostring(event))
+    line("229 NMCS PlaceId match: " .. tostring(game.PlaceId == TARGET_PLACE))
+    line("TheHollow statue mapping: " .. (event == "TheHollow" and "Eye1-4 -> Mirror4-1" or "Eye4-1 -> Mirror4-1 (legacy other event)"))
+    line("Reliable packet (229): " .. describe(remote))
+    line("Packet supports :FireServer: " .. tostring(getPacket() ~= nil))
+    listChildren("ReplicatedStorage.modules", ReplicatedStorage:FindFirstChild("modules"), 32)
+    listChildren("ReplicatedStorage.modules.Packet", packets, 32)
+    listChildren("Workspace.Section1", s1, 32)
+    listChildren("Workspace.Section1.Games", games, 48)
+    listChildren("PlayerGui", PlayerGui, 32)
+    local checks = {
+        { "WhackAClown.Clowns", at(games, "WhackAClown", "Clowns") },
+        { "MiniGolf.GolfBall", at(games, "MiniGolf", "GolfBall") },
+        { "MiniGolf.Hole", at(games, "MiniGolf", "Hole") },
+        { "Puzzle2 EyeStatues", at(Workspace, "Section2", "MainObjective", "Puzzle2", "EyeStatues") },
+        { "Puzzle2 Mirrors", at(Workspace, "Section2", "MainObjective", "Puzzle2", "Mirrors") },
+        { "Dimitra Hitbox", at(Workspace, "Section3", "DimitraBOSS", "PlayerHitbox") },
+    }
+    for _, entry in ipairs(checks) do
+        line(entry[1] .. ": " .. describe(entry[2]))
+    end
+    line("Clown tag hits inside old folder: " .. tostring(#listClowns()))
+    local active, inactive = 0, 0
+    for _, obj in ipairs(listClowns()) do
+        if obj:GetAttribute("Active") == true then active = active + 1 else inactive = inactive + 1 end
+    end
+    line("Clowns Active/other: " .. active .. "/" .. inactive)
+    -- Limit the inspection to Section1 rather than enumerating the full world.
+    if s1 then
+        local candidates = {}
+        local seen = 0
+        for _, obj in ipairs(s1:GetDescendants()) do
+            local name = obj.Name:lower()
+            if name:find("dart", 1, true) or name:find("ring", 1, true)
+                or name:find("dunk", 1, true) or name:find("basket", 1, true)
+                or name:find("golf", 1, true) or name:find("clown", 1, true)
+                or name:find("striker", 1, true) or name:find("hammer", 1, true) then
+                seen = seen + 1
+                if #candidates < 50 then
+                    table.insert(candidates, obj:GetFullName() .. "<" .. obj.ClassName .. ">")
+                end
+            end
+        end
+        line("Section1 minigame-name hits: " .. seen)
+        for _, obj in ipairs(candidates) do line("  " .. obj) end
+        if seen > #candidates then line("  [truncated]") end
+    end
+    line("Caution: packet sent != server accepted. Current event can change paths/arguments.")
+    return table.concat(lines, "\n")
+end
+
+local function printRuntimeReport(copyIt)
+    local report = buildRuntimeReport()
+    print(report)
+    if type(writefile) == "function" then
+        local okSave, saveErr = pcall(writefile, "Circus_Diagnostic.txt", report)
+        if not okSave then warn("[NMCS] writefile: " .. tostring(saveErr)) end
+    end
+    if copyIt and type(setclipboard) == "function" then
+        local ok, err = pcall(setclipboard, report)
+        if ok then
+            notify("Đã sao chép báo cáo", "Dán nội dung báo cáo NMCS vào cuộc trò chuyện để xác định đường dẫn game mới.", "check")
+            return
+        end
+        warn("[NMCS] setclipboard: " .. tostring(err))
+    end
+    notify("Báo cáo runtime", "Đã in F9 và thử lưu Circus_Diagnostic.txt; gửi báo cáo để đối chiếu source 229.", "info")
+end
+
+-- ==========================================================================
 -- NativeUI: both games load the same library from GitHub; windows remain independent.
 -- ==========================================================================
 local function loadWindUI()
-    local url = "https://raw.githubusercontent.com/eystearisdown/wyattrz/main/NativeUI.lua"
-    local ok, result = pcall(function()
-        local code = game:HttpGet(url, true)
-        if type(code) ~= "string" or #code < 1024 or code:lower():find("<!doctype", 1, true) then
-            error("UI response không hợp lệ")
+    local base = "https://raw.githubusercontent.com/eystearisdown/wyattrz/main/"
+    local errors = {}
+    for _, filename in ipairs({ "NativeUI.lua", "ui.lua" }) do
+        local ok, result = pcall(function()
+            local code = game:HttpGet(base .. filename, true)
+            if type(code) ~= "string" or #code < 1024 or code:lower():find("<!doctype", 1, true) then
+                error("Nội dung UI không phải Lua hợp lệ")
+            end
+            local fn, loadErr = loadstring(code)
+            if not fn then error(loadErr) end
+            return fn()
+        end)
+        if ok and result and type(result.CreateWindow) == "function" then
+            if filename ~= "NativeUI.lua" then
+                warn("[NMCS] Repo chưa có NativeUI.lua, đang dùng ui.lua cũ. Hãy đổi tên khi upload.")
+            end
+            return result
         end
-        local fn, loadErr = loadstring(code)
-        if not fn then error(loadErr) end
-        return fn()
-    end)
-    if not ok then warn("[NMCS] Không tải được WindUI: " .. tostring(result)); return nil end
-    return result
+        table.insert(errors, filename .. ": " .. tostring(result))
+    end
+    warn("[NMCS] Không thể nạp NativeUI: " .. table.concat(errors, " | "))
+    return nil
 end
 
 WindUI = loadWindUI()
@@ -1166,7 +1283,9 @@ local ESPTab = Window:Tab({ Title = "ESP", Icon = "eye" })
 local PlayerTab = Window:Tab({ Title = "Cá nhân", Icon = "user" })
 local SettingTab = Window:Tab({ Title = "Cài đặt", Icon = "settings" })
 
-paragraph(ClownTab, "Section 1 • Clown", "Logic gốc 229: minigame phải được mở trong game trước khi dùng nhiều chức năng.", "target")
+local currentEvent = Workspace:GetAttribute("MimicEvent")
+paragraph(ClownTab, "Nightmare Circus 2026 • Bản rebuild", "Các lệnh bên dưới giữ nguyên packet từ source 229 (chưa xác nhận tương thích bản mới). MimicEvent: " .. tostring(currentEvent), "info")
+paragraph(ClownTab, "Section 1 • Clown", "Đã vào minigame vẫn có thể không hoạt động nếu server thay packet/arguments. Mở Cài đặt → Sao chép báo cáo để chẩn đoán.", "target")
 addButton(ClownTab, "Auto Darts • 15 điểm", "", function(token)
     return throwSequence("Section1/DartsThrow", DART_COORDS, 0.3, token)
 end)
@@ -1188,7 +1307,7 @@ addButton(DimitraTab, "Auto Moon Puzzle", "", function(token) return completePuz
 addButton(DimitraTab, "Auto Star Puzzle", "", function(token) return completePuzzle("Star", token) end)
 addButton(DimitraTab, "Auto Tarot Puzzle", "", function(token) return completePuzzle("Tarot", token) end)
 divider(DimitraTab)
-paragraph(DimitraTab, "Eye Statues", "Cần chạm các tượng ít nhất một lần; bật trước khi bắt đầu hoặc retry minigame để ghi thứ tự.", "eye")
+paragraph(DimitraTab, "Eye Statues • TheHollow", "MimicEvent=" .. tostring(currentEvent) .. ". Source 229 chỉ thay thứ tự ghép tượng–gương khi bằng TheHollow; không có logic Clown riêng cho The Hollow. Bật trước khi minigame chạy.", "eye")
 addToggle(DimitraTab, "AutoStatues", "Auto Statues • Theo thứ tự gương", "", function(v)
     if not v then clearEyeWatch() else registerEyeWatcher() end
 end)
@@ -1251,6 +1370,12 @@ addUtilityButton(SettingTab, "Kiểm tra Section / Packet • F9", function()
     print("Known Yen folders: " .. #yenFolders())
     notify("Kiểm tra NMCS", "Đã ghi chi tiết vào console F9. Đối tượng theo Section có thể chưa tải.", "info")
 end)
+addUtilityButton(SettingTab, "Sao chép báo cáo Clown / TheHollow (không tương tác server)", function()
+    printRuntimeReport(true)
+end)
+addUtilityButton(SettingTab, "In báo cáo runtime mới vào F9", function()
+    printRuntimeReport(false)
+end)
 addUtilityButton(SettingTab, "Hủy thao tác đang chạy", cancelOnce)
 addUtilityButton(SettingTab, "Tắt tất cả Auto", function()
     for _, key in ipairs({ "AutoClowns", "AutoHammer", "AutoStatues", "AutoBoss" }) do
@@ -1264,4 +1389,4 @@ end)
 addUtilityButton(SettingTab, "Unload Nightmare Circus", cleanup)
 
 pcall(function() ClownTab:Select() end)
-notify("Nevoirs - Nightmare Circus", "Đã nạp NMCS + đầy đủ Local Player từ B3C1. Nút avatar trái để ẩn/hiện menu.", "check")
+notify("Nevoirs - Nightmare Circus", "Circus v2 • Logic 229 cũ, server event 2026 có thể đã đổi. Vào Cài đặt để xuất báo cáo Clown/TheHollow.", "info")
