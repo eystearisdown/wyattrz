@@ -1,6 +1,6 @@
 --[[
     Nevoirs | Circus.lua | Nightmare Circus (The Mimic)
-    Standalone NMCS port / diagnostics v2 (2026 rebuild compatibility probe)
+    Standalone NMCS port / diagnostics v2.1 (varargs FindFirstChild hotfix)
 
     Gameplay / packet logic: 2294168059.lua (NMCSFunc + PackNMCS + NMCS@Main)
     UI / visual direction: B3C1.lua + NativeUI.lua (compact avatar + ESP)
@@ -104,7 +104,8 @@ local function at(root, ...)
     local obj = root
     for i = 1, select("#", ...) do
         if not obj then return nil end
-        obj = obj:FindFirstChild(select(i, ...))
+        local childName = select(i, ...)
+        obj = obj:FindFirstChild(childName)
     end
     return obj
 end
@@ -1078,7 +1079,7 @@ local function buildRuntimeReport()
     local games = s1 and s1:FindFirstChild("Games")
     local packets = at(ReplicatedStorage, "modules", "Packet")
     local remote = packets and packets:FindFirstChild("Reliable")
-    line("=== NEVOIRS NMCS LIVE REPORT v2 (READ ONLY) ===")
+    line("=== NEVOIRS NMCS LIVE REPORT v2.1 (READ ONLY) ===")
     line("GamePlaceId: " .. tostring(game.PlaceId))
     line("MimicEvent: " .. tostring(event))
     line("229 NMCS PlaceId match: " .. tostring(game.PlaceId == TARGET_PLACE))
@@ -1389,4 +1390,4 @@ end)
 addUtilityButton(SettingTab, "Unload Nightmare Circus", cleanup)
 
 pcall(function() ClownTab:Select() end)
-notify("Nevoirs - Nightmare Circus", "Circus v2 • Logic 229 cũ, server event 2026 có thể đã đổi. Vào Cài đặt để xuất báo cáo Clown/TheHollow.", "info")
+notify("Nevoirs - Nightmare Circus", "Circus v2.1 • Đã sửa lỗi string-to-bool • Logic 229 cũ, server event 2026 có thể đã đổi. Vào Cài đặt để xuất báo cáo Clown/TheHollow.", "info")
